@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedOrdersRouteImport } from './routes/_authenticated/orders'
+import { Route as ApiPublicReveal_srkRouteImport } from './routes/api/public/_reveal_srk'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -33,16 +34,23 @@ const AuthenticatedOrdersRoute = AuthenticatedOrdersRouteImport.update({
   path: '/orders',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const ApiPublicReveal_srkRoute = ApiPublicReveal_srkRouteImport.update({
+  id: '/api/public/_reveal_srk',
+  path: '/api/public',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/login': typeof LoginRoute
   '/orders': typeof AuthenticatedOrdersRoute
+  '/api/public': typeof ApiPublicReveal_srkRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/orders': typeof AuthenticatedOrdersRoute
   '/': typeof AuthenticatedIndexRoute
+  '/api/public': typeof ApiPublicReveal_srkRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -50,23 +58,26 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_authenticated/orders': typeof AuthenticatedOrdersRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/api/public/_reveal_srk': typeof ApiPublicReveal_srkRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/orders'
+  fullPaths: '/' | '/login' | '/orders' | '/api/public'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login' | '/orders' | '/'
+  to: '/login' | '/orders' | '/' | '/api/public'
   id:
     | '__root__'
     | '/_authenticated'
     | '/login'
     | '/_authenticated/orders'
     | '/_authenticated/'
+    | '/api/public/_reveal_srk'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
+  ApiPublicReveal_srkRoute: typeof ApiPublicReveal_srkRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +110,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOrdersRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/api/public/_reveal_srk': {
+      id: '/api/public/_reveal_srk'
+      path: '/api/public'
+      fullPath: '/api/public'
+      preLoaderRoute: typeof ApiPublicReveal_srkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -119,6 +137,7 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
+  ApiPublicReveal_srkRoute: ApiPublicReveal_srkRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
