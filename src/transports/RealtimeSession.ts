@@ -192,7 +192,6 @@ export class RealtimeSession {
     try { this.pc?.close(); } catch { /* noop */ }
     this.dc = null;
     this.pc = null;
-    this.events.clear();
   }
 
   // ─── Event dispatch ───────────────────────────────────────────────────────

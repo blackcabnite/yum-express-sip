@@ -152,7 +152,6 @@ export class SipTransport implements Transport {
     try { await this.ua?.stop(); } catch { /* noop */ }
     this.registerer = null;
     this.ua = null;
-    this.events.clear();
   }
 
   /**
