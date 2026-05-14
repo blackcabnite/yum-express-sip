@@ -181,6 +181,23 @@ export class SipTransport implements Transport {
     }
   }
 
+  private scheduleRegistrationFailure(): void {
+    this.clearRegistrationFailureTimer();
+    this.registrationFailureTimer = setTimeout(() => {
+      if (this.registerAccepted) return;
+      console.warn("[SipTransport] registration lost or refused");
+      this.events.emit("error", {
+        message: "SIP registration refused — check username/password/domain",
+      });
+    }, 1_500);
+  }
+
+  private clearRegistrationFailureTimer(): void {
+    if (!this.registrationFailureTimer) return;
+    clearTimeout(this.registrationFailureTimer);
+    this.registrationFailureTimer = null;
+  }
+
   /**
    * Swap the outbound audio track on the live SIP PC.
    *
