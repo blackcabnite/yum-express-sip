@@ -102,7 +102,7 @@ export default function App(): React.ReactElement {
       setSipError(null);
     });
     const offErr = transport.events.on("error", ({ message }) => {
-      setSipStatus("failed");
+      setSipStatus((s) => (s === "registered" ? s : "failed"));
       setSipError(message);
     });
     return () => { offReg(); offErr(); };

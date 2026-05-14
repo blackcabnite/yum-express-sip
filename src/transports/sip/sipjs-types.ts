@@ -50,9 +50,23 @@ export interface SipRegistererCtor {
 }
 
 export interface SipRegisterer {
-  register(): Promise<void>;
+  register(opts?: SipRegistererRegisterOptions): Promise<void>;
   unregister(): Promise<void>;
   stateChange: { addListener(fn: (state: string) => void): void };
+}
+
+export interface SipRegistererRegisterOptions {
+  requestDelegate?: {
+    onAccept?: (response: SipIncomingResponse) => void;
+    onReject?: (response: SipIncomingResponse) => void;
+  };
+}
+
+export interface SipIncomingResponse {
+  readonly message?: {
+    statusCode?: number;
+    reasonPhrase?: string;
+  };
 }
 
 export interface SipInvitation {
