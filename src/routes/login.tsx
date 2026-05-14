@@ -15,6 +15,7 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -27,12 +28,9 @@ function LoginPage() {
     e.preventDefault();
     setBusy(true);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.origin },
-      });
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      toast.success("Check your email for a sign-in link.");
+      navigate({ to: "/" });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -53,8 +51,12 @@ function LoginPage() {
               <Label htmlFor="email">Email</Label>
               <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
             <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "..." : "Send sign-in link"}
+              {busy ? "..." : "Sign in"}
             </Button>
           </form>
         </CardContent>
