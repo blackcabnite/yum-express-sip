@@ -4,7 +4,7 @@ import * as React from "react";
 // Selects MockTransport or SipTransport based on VITE_TRANSPORT env var.
 // State lives in CallSession; this component renders snapshots.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MENU } from "@/domain/menu";
 import { MenuLookup } from "@/domain/MenuLookup";
 import { formatPence } from "@/domain/OrderEngine";
@@ -70,7 +70,10 @@ const dispatcher: OrderDispatcher = {
 // ─── Transport selection ───────────────────────────────────────────────────
 type TransportMode = "mock" | "sip";
 
-function buildTransport(): { transport: Transport; mode: TransportMode } {
+function buildTransport(passwordOverride: { current: string | null }): {
+  transport: Transport;
+  mode: TransportMode;
+} {
   const mode = ((import.meta.env.VITE_TRANSPORT as string | undefined) ?? "sip").toLowerCase();
   if (mode === "sip") {
     const wssUrl = (import.meta.env.VITE_SIP_WSS_URL as string | undefined) ?? "wss://sip.imtech.app:8089/ws";
@@ -79,7 +82,12 @@ function buildTransport(): { transport: Transport; mode: TransportMode } {
     return {
       transport: new SipTransport(
         { wssUrl, user, domain },
-        async () => ({ password: await fetchSipPassword() }),
+        async () => {
+          if (passwordOverride.current && passwordOverride.current.length > 0) {
+            return { password: passwordOverride.current };
+          }
+          return { password: await fetchSipPassword() };
+        },
       ),
       mode: "sip",
     };
@@ -89,7 +97,11 @@ function buildTransport(): { transport: Transport; mode: TransportMode } {
 
 // ─── App ───────────────────────────────────────────────────────────────────
 export default function App(): React.ReactElement {
-  const { transport, mode } = useMemo(() => buildTransport(), []);
+  const passwordOverrideRef = useRef<string | null>(null);
+  const { transport, mode } = useMemo(() => buildTransport(passwordOverrideRef), []);
+
+  const [pwInput, setPwInput] = useState<string>("");
+  const [reconnecting, setReconnecting] = useState<boolean>(false);
 
   type SipStatus = "idle" | "connecting" | "registered" | "failed";
   const [sipStatus, setSipStatus] = useState<SipStatus>(mode === "sip" ? "connecting" : "idle");
@@ -139,6 +151,22 @@ export default function App(): React.ReactElement {
     if (state.error) console.error("[session] error:", state.error);
   }, [state.error]);
 
+  const reconnectWithPassword = async (): Promise<void> => {
+    if (!(transport instanceof SipTransport)) return;
+    passwordOverrideRef.current = pwInput.trim() || null;
+    setSipStatus("connecting");
+    setSipError(null);
+    setReconnecting(true);
+    try {
+      await transport.reconnect();
+    } catch (err) {
+      setSipStatus("failed");
+      setSipError((err as Error).message);
+    } finally {
+      setReconnecting(false);
+    }
+  };
+
   const inCall = ["ringing", "bridging", "listening", "aiSpeaking", "toolPending", "confirming", "wrappingUp"].includes(state.phase);
 
   return (
@@ -173,6 +201,32 @@ export default function App(): React.ReactElement {
       <PhaseRail current={state.phase} />
 
       {state.error && <div className="error">⚠ {state.error}</div>}
+
+      {mode === "sip" && (
+        <section className="sip-creds">
+          <label htmlFor="sip-pw">Test SIP password</label>
+          <input
+            id="sip-pw"
+            type="password"
+            placeholder="leave blank to use server secret"
+            value={pwInput}
+            maxLength={256}
+            autoComplete="off"
+            onChange={(e) => setPwInput(e.target.value)}
+            disabled={reconnecting}
+          />
+          <button
+            className="btn"
+            onClick={() => void reconnectWithPassword()}
+            disabled={reconnecting || inCall}
+          >
+            {reconnecting ? "Reconnecting…" : "Reconnect"}
+          </button>
+          <span className="hint">
+            Stays in this browser tab only. Never sent to the server.
+          </span>
+        </section>
+      )}
 
       <section className="caller-row">
         <span className="label">Caller</span>
