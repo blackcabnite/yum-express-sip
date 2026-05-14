@@ -109,15 +109,18 @@ export default function App(): React.ReactElement {
 
   useEffect(() => {
     if (mode !== "sip") return;
-    const offReg = transport.events.on("registered", () => {
+    console.log("[App] attaching SIP listeners");
+    const offReg = transport.events.on("registered", (e) => {
+      console.log("[App] registered event received", e);
       setSipStatus("registered");
       setSipError(null);
     });
     const offErr = transport.events.on("error", ({ message }) => {
+      console.log("[App] error event received", message);
       setSipStatus((s) => (s === "registered" ? s : "failed"));
       setSipError(message);
     });
-    return () => { offReg(); offErr(); };
+    return () => { console.log("[App] detaching SIP listeners"); offReg(); offErr(); };
   }, [transport, mode]);
 
   const session = useMemo(() => {
