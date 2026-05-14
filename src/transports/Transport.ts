@@ -16,6 +16,7 @@ export interface AcceptedCall {
 
 export interface TransportEvents {
   ready: void;
+  registered: { user: string; domain: string };
   incoming: { caller: CallerInfo; accept: () => Promise<AcceptedCall>; reject: () => void };
   ended: void;
   error: { message: string };
