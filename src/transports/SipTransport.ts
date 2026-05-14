@@ -65,6 +65,7 @@ export class SipTransport implements Transport {
   private currentInvitation: SipInvitation | null = null;
   private currentPc: RTCPeerConnection | null = null;
   private mutedMicTrack: MediaStreamTrack | null = null;
+  private registerAccepted = false;
 
   constructor(
     private readonly cfg: SipConfig,
@@ -104,21 +105,36 @@ export class SipTransport implements Transport {
 
     await this.ua.start();
 
+    this.registerAccepted = false;
     this.registerer = new sipjs.Registerer(this.ua, { expires: 300 });
     this.registerer.stateChange.addListener((state) => {
       if (state === "Registered") {
         this.events.emit("ready", undefined);
         this.events.emit("registered", { user: this.cfg.user, domain: this.cfg.domain });
       } else if (state === "Unregistered") {
-        // Lost / refused registration — surface so the UI can show "failed".
-        console.warn("[SipTransport] registration lost or refused");
-        this.events.emit("error", {
-          message: "SIP registration refused — check username/password/domain",
-        });
+        // Asterisk + sip.js quirk: with rewrite_contact=yes, the 200 OK comes
+        // back with a rewritten Contact, sip.js can't match it, and flips to
+        // Unregistered even though the server accepted us. If we already saw
+        // a 200 OK on REGISTER, treat that as authoritative.
+        if (this.registerAccepted) {
+          console.warn("[SipTransport] sip.js Unregistered after 200 OK — treating as registered (Asterisk rewrite_contact)");
+        } else {
+          console.warn("[SipTransport] registration lost or refused");
+          this.events.emit("error", {
+            message: "SIP registration refused — check username/password/domain",
+          });
+        }
       }
     });
     await this.registerer.register({
       requestDelegate: {
+        onAccept: (response) => {
+          this.registerAccepted = true;
+          const sc = response?.message?.statusCode;
+          console.log(`[SipTransport] REGISTER accepted (${sc ?? "200"})`);
+          this.events.emit("ready", undefined);
+          this.events.emit("registered", { user: this.cfg.user, domain: this.cfg.domain });
+        },
         onReject: (response) => {
           const sc = response?.message?.statusCode;
           const rp = response?.message?.reasonPhrase;
