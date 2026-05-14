@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useEffect, useRef } from "react";
 import type { TranscriptLine } from "@/domain/types";
 
@@ -5,7 +6,7 @@ interface Props {
   transcript: readonly TranscriptLine[];
 }
 
-export function TranscriptPanel({ transcript }: Props): JSX.Element {
+export function TranscriptPanel({ transcript }: Props): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;

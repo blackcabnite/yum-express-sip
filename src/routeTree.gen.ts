@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSipAuthRouteImport } from './routes/api/sip-auth'
+import { Route as ApiMintRouteImport } from './routes/api/mint'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSipAuthRoute = ApiSipAuthRouteImport.update({
+  id: '/api/sip-auth',
+  path: '/api/sip-auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMintRoute = ApiMintRouteImport.update({
+  id: '/api/mint',
+  path: '/api/mint',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/mint': typeof ApiMintRoute
+  '/api/sip-auth': typeof ApiSipAuthRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/mint': typeof ApiMintRoute
+  '/api/sip-auth': typeof ApiSipAuthRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/mint': typeof ApiMintRoute
+  '/api/sip-auth': typeof ApiSipAuthRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/mint' | '/api/sip-auth'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/mint' | '/api/sip-auth'
+  id: '__root__' | '/' | '/api/mint' | '/api/sip-auth'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiMintRoute: typeof ApiMintRoute
+  ApiSipAuthRoute: typeof ApiSipAuthRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,22 +68,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/sip-auth': {
+      id: '/api/sip-auth'
+      path: '/api/sip-auth'
+      fullPath: '/api/sip-auth'
+      preLoaderRoute: typeof ApiSipAuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mint': {
+      id: '/api/mint'
+      path: '/api/mint'
+      fullPath: '/api/mint'
+      preLoaderRoute: typeof ApiMintRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiMintRoute: ApiMintRoute,
+  ApiSipAuthRoute: ApiSipAuthRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

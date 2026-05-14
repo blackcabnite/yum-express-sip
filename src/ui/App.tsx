@@ -1,3 +1,4 @@
+import * as React from "react";
 // App.tsx — the demo page.
 //
 // Selects MockTransport or SipTransport based on VITE_TRANSPORT env var.
@@ -95,7 +96,7 @@ function buildTransport(): { transport: Transport; mode: TransportMode } {
 }
 
 // ─── App ───────────────────────────────────────────────────────────────────
-export default function App(): JSX.Element {
+export default function App(): React.ReactElement {
   const { transport, mode } = useMemo(() => buildTransport(), []);
 
   const session = useMemo(() => {
