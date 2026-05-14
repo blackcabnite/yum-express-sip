@@ -14,7 +14,139 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      sweetspot_call_events: {
+        Row: {
+          at: string
+          id: string
+          kind: string
+          payload: Json | null
+          session_id: string
+          text: string | null
+        }
+        Insert: {
+          at?: string
+          id?: string
+          kind: string
+          payload?: Json | null
+          session_id: string
+          text?: string | null
+        }
+        Update: {
+          at?: string
+          id?: string
+          kind?: string
+          payload?: Json | null
+          session_id?: string
+          text?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sweetspot_call_events_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sweetspot_call_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sweetspot_call_sessions: {
+        Row: {
+          asterisk_channel_id: string | null
+          caller_msisdn: string | null
+          cart: Json
+          created_at: string
+          current_intent: string | null
+          customer_name: string | null
+          ended_at: string | null
+          id: string
+          language: string | null
+          last_ai_line: string | null
+          last_caller_transcript: string | null
+          started_at: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          asterisk_channel_id?: string | null
+          caller_msisdn?: string | null
+          cart?: Json
+          created_at?: string
+          current_intent?: string | null
+          customer_name?: string | null
+          ended_at?: string | null
+          id?: string
+          language?: string | null
+          last_ai_line?: string | null
+          last_caller_transcript?: string | null
+          started_at?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          asterisk_channel_id?: string | null
+          caller_msisdn?: string | null
+          cart?: Json
+          created_at?: string
+          current_intent?: string | null
+          customer_name?: string | null
+          ended_at?: string | null
+          id?: string
+          language?: string | null
+          last_ai_line?: string | null
+          last_caller_transcript?: string | null
+          started_at?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sweetspot_orders: {
+        Row: {
+          caller_msisdn: string | null
+          created_at: string
+          customer_name: string | null
+          dispatched_at: string | null
+          id: string
+          items: Json
+          receipt_no: string | null
+          session_id: string | null
+          total_pence: number
+          whatsapp_sent_at: string | null
+        }
+        Insert: {
+          caller_msisdn?: string | null
+          created_at?: string
+          customer_name?: string | null
+          dispatched_at?: string | null
+          id?: string
+          items?: Json
+          receipt_no?: string | null
+          session_id?: string | null
+          total_pence?: number
+          whatsapp_sent_at?: string | null
+        }
+        Update: {
+          caller_msisdn?: string | null
+          created_at?: string
+          customer_name?: string | null
+          dispatched_at?: string | null
+          id?: string
+          items?: Json
+          receipt_no?: string | null
+          session_id?: string | null
+          total_pence?: number
+          whatsapp_sent_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sweetspot_orders_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sweetspot_call_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
