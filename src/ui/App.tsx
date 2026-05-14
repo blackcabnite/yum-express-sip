@@ -137,8 +137,11 @@ export default function App(): React.ReactElement {
           {mode === "mock" && !inCall && (
             <button className="btn primary" onClick={startMockCall}>Start mock call</button>
           )}
-          {mode === "sip" && !inCall && (
+          {mode === "sip" && !inCall && !state.error && (
             <span className="awaiting">awaiting call…</span>
+          )}
+          {mode === "sip" && !inCall && state.error && (
+            <span className="awaiting">connection failed</span>
           )}
           {inCall && <button className="btn" onClick={() => void transport.hangup()}>Hang up</button>}
         </div>
