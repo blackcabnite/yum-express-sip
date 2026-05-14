@@ -55,7 +55,6 @@ export class MockTransport implements Transport {
 
   async disconnect(): Promise<void> {
     await this.hangup();
-    this.events.clear();
   }
 
   /**
