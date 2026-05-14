@@ -367,3 +367,19 @@ body {
   color: var(--caller);
   animation: pulse 1.4s ease-in-out infinite;
 }
+
+.sip-status {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
+}
+.sip-status strong {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.sip-status[data-status="connecting"] strong { color: var(--accent); }
+.sip-status[data-status="registered"] strong { color: #2a8f4a; }
+.sip-status[data-status="failed"]     strong { color: #c2410c; }
