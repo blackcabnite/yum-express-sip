@@ -14,9 +14,7 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -29,16 +27,12 @@ function LoginPage() {
     e.preventDefault();
     setBusy(true);
     try {
-      const { error } =
-        mode === "signin"
-          ? await supabase.auth.signInWithPassword({ email, password })
-          : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin },
+      });
       if (error) throw error;
-      if (mode === "signup") {
-        toast.success("Check your email to confirm your account.");
-      } else {
-        navigate({ to: "/" });
-      }
+      toast.success("Check your email for a sign-in link.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -59,21 +53,10 @@ function LoginPage() {
               <Label htmlFor="email">Email</Label>
               <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
-            </div>
             <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "..." : mode === "signin" ? "Sign in" : "Create account"}
+              {busy ? "..." : "Send sign-in link"}
             </Button>
           </form>
-          <button
-            type="button"
-            className="mt-4 w-full text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-          >
-            {mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}
-          </button>
         </CardContent>
       </Card>
     </div>
