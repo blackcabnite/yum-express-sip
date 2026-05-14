@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 
 // TEMPORARY one-off endpoint to reveal the service role key after rotation.
 // DELETE this file immediately after copying the value.
-export const Route = createFileRoute('/api/public/_reveal_srk')({
+export const Route = createFileRoute('/api/public/reveal-srk')({
   server: {
     handlers: {
       GET: async () => {
