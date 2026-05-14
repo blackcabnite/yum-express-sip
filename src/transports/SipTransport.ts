@@ -252,32 +252,9 @@ export class SipTransport implements Transport {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 async function defaultLoadSipJs(): Promise<SipJs> {
-  // Inject the sip.js UMD bundle on demand. Idempotent — if already loaded,
-  // returns the cached window.SIP global. Keeps sip.js out of the Vite bundle.
-  const SRC = "https://cdn.jsdelivr.net/npm/sip.js@0.21.2/dist/sip.min.js";
-  const w = globalThis as unknown as { SIP?: SipJs; document?: Document };
-  if (w.SIP) return w.SIP;
-  if (typeof document === "undefined") {
-    throw new Error("sip.js can only be loaded in the browser");
-  }
-  return new Promise<SipJs>((resolve, reject) => {
-    let script = document.querySelector<HTMLScriptElement>(`script[data-sipjs="1"]`);
-    if (!script) {
-      script = document.createElement("script");
-      script.src = SRC;
-      script.async = true;
-      script.dataset.sipjs = "1";
-      document.head.appendChild(script);
-    }
-    const onLoad = (): void => {
-      if (w.SIP) resolve(w.SIP);
-      else reject(new Error("sip.js loaded but window.SIP is undefined"));
-    };
-    const onError = (): void => reject(new Error(`Failed to load sip.js from ${SRC}`));
-    if (w.SIP) { resolve(w.SIP); return; }
-    script.addEventListener("load", onLoad, { once: true });
-    script.addEventListener("error", onError, { once: true });
-  });
+  // Load from the installed package instead of a CDN. The preview can block
+  // third-party scripts, but Vite can safely bundle sip.js as an app chunk.
+  return (await import("sip.js")) as unknown as SipJs;
 }
 
 async function safeBye(invitation: SipInvitation): Promise<void> {
