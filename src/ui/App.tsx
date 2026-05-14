@@ -74,7 +74,7 @@ function buildTransport(): { transport: Transport; mode: TransportMode } {
   const mode = ((import.meta.env.VITE_TRANSPORT as string | undefined) ?? "sip").toLowerCase();
   if (mode === "sip") {
     const wssUrl = (import.meta.env.VITE_SIP_WSS_URL as string | undefined) ?? "wss://sip.imtech.app:8089/ws";
-    const user   = (import.meta.env.VITE_SIP_USER    as string | undefined) ?? "241203";
+    const user   = (import.meta.env.VITE_SIP_USER    as string | undefined) ?? "ada-web";
     const domain = (import.meta.env.VITE_SIP_DOMAIN  as string | undefined) ?? "sip.imtech.app";
     return {
       transport: new SipTransport(
