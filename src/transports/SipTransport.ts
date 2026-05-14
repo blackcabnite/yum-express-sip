@@ -66,6 +66,7 @@ export class SipTransport implements Transport {
   private currentPc: RTCPeerConnection | null = null;
   private mutedMicTrack: MediaStreamTrack | null = null;
   private registerAccepted = false;
+  private registrationFailureTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly cfg: SipConfig,
@@ -109,6 +110,7 @@ export class SipTransport implements Transport {
     this.registerer = new sipjs.Registerer(this.ua, { expires: 300 });
     this.registerer.stateChange.addListener((state) => {
       if (state === "Registered") {
+        this.clearRegistrationFailureTimer();
         this.events.emit("ready", undefined);
         this.events.emit("registered", { user: this.cfg.user, domain: this.cfg.domain });
       } else if (state === "Unregistered") {
@@ -119,10 +121,7 @@ export class SipTransport implements Transport {
         if (this.registerAccepted) {
           console.warn("[SipTransport] sip.js Unregistered after 200 OK — treating as registered (Asterisk rewrite_contact)");
         } else {
-          console.warn("[SipTransport] registration lost or refused");
-          this.events.emit("error", {
-            message: "SIP registration refused — check username/password/domain",
-          });
+          this.scheduleRegistrationFailure();
         }
       }
     });
@@ -130,6 +129,7 @@ export class SipTransport implements Transport {
       requestDelegate: {
         onAccept: (response) => {
           this.registerAccepted = true;
+          this.clearRegistrationFailureTimer();
           const sc = response?.message?.statusCode;
           console.log(`[SipTransport] REGISTER accepted (${sc ?? "200"})`);
           this.events.emit("ready", undefined);
@@ -148,6 +148,7 @@ export class SipTransport implements Transport {
 
   async disconnect(): Promise<void> {
     await this.hangup();
+    this.clearRegistrationFailureTimer();
     try { await this.registerer?.unregister(); } catch { /* noop */ }
     try { await this.ua?.stop(); } catch { /* noop */ }
     this.registerer = null;
