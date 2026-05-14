@@ -83,12 +83,10 @@ function buildTransport(): { transport: Transport; mode: TransportMode } {
       );
     }
     return {
-      transport: new SipTransport({
-        wssUrl,
-        user,
-        domain,
-        fetchPassword: fetchSipPassword,
-      }),
+      transport: new SipTransport(
+        { wssUrl, user, domain },
+        async () => ({ password: await fetchSipPassword() }),
+      ),
       mode: "sip",
     };
   }

@@ -47,9 +47,13 @@ export interface SipConfig {
   readonly wssUrl: string;        // e.g. "wss://pbx.example.com:8089/ws"
   readonly user: string;          // SIP extension username, e.g. "ada-web"
   readonly domain: string;        // SIP domain, e.g. "pbx.example.com"
-  /** Caller-side fetch for the password; returns it once, never caches. */
-  readonly fetchPassword: () => Promise<string>;
-  /** Override for tests — production should use the default dynamic import. */
+}
+
+/** Per-session credential fetcher. Returns the SIP password to register with. */
+export type SipPasswordFetcher = () => Promise<{ password: string }>;
+
+export interface SipTransportOptions {
+  /** Override for tests — production loads sip.js from a CDN script tag. */
   readonly loadSipJs?: () => Promise<SipJs>;
 }
 
@@ -62,13 +66,17 @@ export class SipTransport implements Transport {
   private currentPc: RTCPeerConnection | null = null;
   private mutedMicTrack: MediaStreamTrack | null = null;
 
-  constructor(private readonly cfg: SipConfig) {}
+  constructor(
+    private readonly cfg: SipConfig,
+    private readonly fetchPassword: SipPasswordFetcher,
+    private readonly opts: SipTransportOptions = {},
+  ) {}
 
   // ─── Public API ───────────────────────────────────────────────────────────
   async connect(): Promise<void> {
-    const sipjs = await (this.cfg.loadSipJs?.() ?? defaultLoadSipJs());
+    const sipjs = await (this.opts.loadSipJs?.() ?? defaultLoadSipJs());
 
-    const password = await this.cfg.fetchPassword();
+    const { password } = await this.fetchPassword();
     if (!password) {
       throw new Error("SIP password is empty — check your mint endpoint");
     }
@@ -100,6 +108,7 @@ export class SipTransport implements Transport {
     this.registerer.stateChange.addListener((state) => {
       if (state === "Registered") {
         this.events.emit("ready", undefined);
+        this.events.emit("registered", { user: this.cfg.user, domain: this.cfg.domain });
       } else if (state === "Unregistered") {
         // Lost registration — surface but don't tear down (auto-reregister).
         console.warn("[SipTransport] registration lost");
@@ -243,10 +252,37 @@ export class SipTransport implements Transport {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 async function defaultLoadSipJs(): Promise<SipJs> {
-  // Dynamic import keeps sip.js out of the typecheck path. The package must
-  // be installed (`npm install sip.js`) for this to resolve at runtime.
-  const mod = await import(/* @vite-ignore */ "sip.js" as string);
-  return mod as unknown as SipJs;
+  // Load sip.js from a CDN script tag at runtime. This keeps sip.js out of
+  // the bundle and out of the typecheck path. The caller is expected to
+  // <script src="https://cdn.jsdelivr.net/npm/sip.js@.../sip.min.js"> the
+  // library before calling connect(); we poll window.SIP / wait for a
+  // "sipjs-ready" event for up to 10s as a safety net.
+  const w = globalThis as unknown as { SIP?: SipJs };
+  if (w.SIP) return w.SIP;
+
+  return new Promise<SipJs>((resolve, reject) => {
+    const start = Date.now();
+    const onReady = (): void => {
+      if (w.SIP) {
+        cleanup();
+        resolve(w.SIP);
+      }
+    };
+    const interval = setInterval(() => {
+      if (w.SIP) {
+        cleanup();
+        resolve(w.SIP);
+      } else if (Date.now() - start > 10_000) {
+        cleanup();
+        reject(new Error("sip.js not loaded — include the sip.min.js <script> tag before SipTransport.connect()"));
+      }
+    }, 100);
+    const cleanup = (): void => {
+      clearInterval(interval);
+      globalThis.removeEventListener?.("sipjs-ready", onReady);
+    };
+    globalThis.addEventListener?.("sipjs-ready", onReady);
+  });
 }
 
 async function safeBye(invitation: SipInvitation): Promise<void> {
