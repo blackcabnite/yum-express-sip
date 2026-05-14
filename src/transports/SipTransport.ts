@@ -162,6 +162,7 @@ export class SipTransport implements Transport {
    */
   async reconnect(): Promise<void> {
     await this.hangup();
+    this.clearRegistrationFailureTimer();
     try { await this.registerer?.unregister(); } catch { /* noop */ }
     try { await this.ua?.stop(); } catch { /* noop */ }
     this.registerer = null;
