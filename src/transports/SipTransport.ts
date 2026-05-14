@@ -252,36 +252,31 @@ export class SipTransport implements Transport {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 async function defaultLoadSipJs(): Promise<SipJs> {
-  // Load sip.js from a CDN script tag at runtime. This keeps sip.js out of
-  // the bundle and out of the typecheck path. The caller is expected to
-  // <script src="https://cdn.jsdelivr.net/npm/sip.js@.../sip.min.js"> the
-  // library before calling connect(); we poll window.SIP / wait for a
-  // "sipjs-ready" event for up to 10s as a safety net.
-  const w = globalThis as unknown as { SIP?: SipJs };
+  // Inject the sip.js UMD bundle on demand. Idempotent — if already loaded,
+  // returns the cached window.SIP global. Keeps sip.js out of the Vite bundle.
+  const SRC = "https://cdn.jsdelivr.net/npm/sip.js@0.21.2/dist/sip.min.js";
+  const w = globalThis as unknown as { SIP?: SipJs; document?: Document };
   if (w.SIP) return w.SIP;
-
+  if (typeof document === "undefined") {
+    throw new Error("sip.js can only be loaded in the browser");
+  }
   return new Promise<SipJs>((resolve, reject) => {
-    const start = Date.now();
-    const onReady = (): void => {
-      if (w.SIP) {
-        cleanup();
-        resolve(w.SIP);
-      }
+    let script = document.querySelector<HTMLScriptElement>(`script[data-sipjs="1"]`);
+    if (!script) {
+      script = document.createElement("script");
+      script.src = SRC;
+      script.async = true;
+      script.dataset.sipjs = "1";
+      document.head.appendChild(script);
+    }
+    const onLoad = (): void => {
+      if (w.SIP) resolve(w.SIP);
+      else reject(new Error("sip.js loaded but window.SIP is undefined"));
     };
-    const interval = setInterval(() => {
-      if (w.SIP) {
-        cleanup();
-        resolve(w.SIP);
-      } else if (Date.now() - start > 10_000) {
-        cleanup();
-        reject(new Error("sip.js not loaded — include the sip.min.js <script> tag before SipTransport.connect()"));
-      }
-    }, 100);
-    const cleanup = (): void => {
-      clearInterval(interval);
-      globalThis.removeEventListener?.("sipjs-ready", onReady);
-    };
-    globalThis.addEventListener?.("sipjs-ready", onReady);
+    const onError = (): void => reject(new Error(`Failed to load sip.js from ${SRC}`));
+    if (w.SIP) { resolve(w.SIP); return; }
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener("error", onError, { once: true });
   });
 }
 
