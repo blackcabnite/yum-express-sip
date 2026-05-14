@@ -1,3 +1,4 @@
+import * as React from "react";
 // PhaseRail — visualizes the current call phase against the full set of
 // possible phases. The FSM is the architecture's centerpiece, so it gets
 // pride of place in the UI.
@@ -17,7 +18,7 @@ const PHASE_ORDER: readonly { phase: CallPhase; label: string }[] = [
   { phase: "ended",       label: "ended" },
 ];
 
-export function PhaseRail({ current }: { current: CallPhase }): JSX.Element {
+export function PhaseRail({ current }: { current: CallPhase }): React.ReactElement {
   const currentIdx = PHASE_ORDER.findIndex((p) => p.phase === current);
   return (
     <div className="phase-rail" role="status" aria-label={`Call phase: ${current}`}>

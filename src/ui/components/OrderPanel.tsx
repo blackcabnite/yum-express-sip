@@ -1,3 +1,4 @@
+import * as React from "react";
 import type { OrderLine } from "@/domain/types";
 
 interface Props {
@@ -6,7 +7,7 @@ interface Props {
   format: (pence: number) => string;
 }
 
-export function OrderPanel({ order, receipt, format }: Props): JSX.Element {
+export function OrderPanel({ order, receipt, format }: Props): React.ReactElement {
   const total = order.reduce((sum, l) => sum + l.unitPence * l.qty, 0);
   return (
     <section className="panel">
