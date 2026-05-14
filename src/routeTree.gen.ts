@@ -9,97 +9,117 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiSipAuthRouteImport } from './routes/api/sip-auth'
-import { Route as ApiMintRouteImport } from './routes/api/mint'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedOrdersRouteImport } from './routes/_authenticated/orders'
 
-const IndexRoute = IndexRouteImport.update({
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedRoute = AuthenticatedRouteImport.update({
+  id: '/_authenticated',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
-const ApiSipAuthRoute = ApiSipAuthRouteImport.update({
-  id: '/api/sip-auth',
-  path: '/api/sip-auth',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMintRoute = ApiMintRouteImport.update({
-  id: '/api/mint',
-  path: '/api/mint',
-  getParentRoute: () => rootRouteImport,
+const AuthenticatedOrdersRoute = AuthenticatedOrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/api/mint': typeof ApiMintRoute
-  '/api/sip-auth': typeof ApiSipAuthRoute
+  '/': typeof AuthenticatedIndexRoute
+  '/login': typeof LoginRoute
+  '/orders': typeof AuthenticatedOrdersRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/api/mint': typeof ApiMintRoute
-  '/api/sip-auth': typeof ApiSipAuthRoute
+  '/login': typeof LoginRoute
+  '/orders': typeof AuthenticatedOrdersRoute
+  '/': typeof AuthenticatedIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/api/mint': typeof ApiMintRoute
-  '/api/sip-auth': typeof ApiSipAuthRoute
+  '/_authenticated': typeof AuthenticatedRouteWithChildren
+  '/login': typeof LoginRoute
+  '/_authenticated/orders': typeof AuthenticatedOrdersRoute
+  '/_authenticated/': typeof AuthenticatedIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/mint' | '/api/sip-auth'
+  fullPaths: '/' | '/login' | '/orders'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/mint' | '/api/sip-auth'
-  id: '__root__' | '/' | '/api/mint' | '/api/sip-auth'
+  to: '/login' | '/orders' | '/'
+  id:
+    | '__root__'
+    | '/_authenticated'
+    | '/login'
+    | '/_authenticated/orders'
+    | '/_authenticated/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  ApiMintRoute: typeof ApiMintRoute
-  ApiSipAuthRoute: typeof ApiSipAuthRoute
+  AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
+  LoginRoute: typeof LoginRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated': {
+      id: '/_authenticated'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthenticatedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/': {
+      id: '/_authenticated/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthenticatedIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
-    '/api/sip-auth': {
-      id: '/api/sip-auth'
-      path: '/api/sip-auth'
-      fullPath: '/api/sip-auth'
-      preLoaderRoute: typeof ApiSipAuthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/mint': {
-      id: '/api/mint'
-      path: '/api/mint'
-      fullPath: '/api/mint'
-      preLoaderRoute: typeof ApiMintRouteImport
-      parentRoute: typeof rootRouteImport
+    '/_authenticated/orders': {
+      id: '/_authenticated/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof AuthenticatedOrdersRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
   }
 }
 
+interface AuthenticatedRouteChildren {
+  AuthenticatedOrdersRoute: typeof AuthenticatedOrdersRoute
+  AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+}
+
+const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedOrdersRoute: AuthenticatedOrdersRoute,
+  AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+}
+
+const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
+  AuthenticatedRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  ApiMintRoute: ApiMintRoute,
-  ApiSipAuthRoute: ApiSipAuthRoute,
+  AuthenticatedRoute: AuthenticatedRouteWithChildren,
+  LoginRoute: LoginRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
