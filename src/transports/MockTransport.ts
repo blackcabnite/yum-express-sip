@@ -28,7 +28,7 @@ export class MockTransport implements Transport {
     if (this.outboundEl) return;
     const el = document.createElement("audio");
     el.autoplay = true;
-    el.playsInline = true;
+    el.setAttribute("playsinline", "");
     el.style.display = "none";
     document.body.appendChild(el);
     this.outboundEl = el;
