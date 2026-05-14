@@ -281,6 +281,12 @@ export class RealtimeSession {
         return;
 
       case "error":
+        // OpenAI returns this when response.cancel races with a response that
+        // already finished on its own. It's not actionable for the user.
+        if (/no active response/i.test(ev.error.message)) {
+          console.debug("[RealtimeSession] ignoring stale cancel:", ev.error.message);
+          return;
+        }
         this.events.emit("error", { message: ev.error.message });
         return;
     }
