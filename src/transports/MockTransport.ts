@@ -23,6 +23,30 @@ export class MockTransport implements Transport {
     // <audio> creation before user gesture.
   }
 
+  /** Call from a user gesture (button click) to unlock autoplay. */
+  primeAudio(): void {
+    if (this.outboundEl) return;
+    const el = document.createElement("audio");
+    el.autoplay = true;
+    el.setAttribute("playsinline", "");
+    el.style.display = "none";
+    document.body.appendChild(el);
+    this.outboundEl = el;
+    // Prime: play a silent stream so the element is "user-activated".
+    try {
+      const ctx = new AudioContext();
+      const dest = ctx.createMediaStreamDestination();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      osc.connect(gain).connect(dest);
+      osc.start();
+      el.srcObject = dest.stream;
+      void el.play().catch(() => {});
+      setTimeout(() => { try { osc.stop(); } catch {} ; el.srcObject = null; }, 100);
+    } catch { /* noop */ }
+  }
+
   async connect(): Promise<void> {
     // Pre-request mic permission so the first "call" doesn't stall on a
     // permission prompt mid-flow.
