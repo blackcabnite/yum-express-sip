@@ -110,11 +110,24 @@ export class SipTransport implements Transport {
         this.events.emit("ready", undefined);
         this.events.emit("registered", { user: this.cfg.user, domain: this.cfg.domain });
       } else if (state === "Unregistered") {
-        // Lost registration — surface but don't tear down (auto-reregister).
-        console.warn("[SipTransport] registration lost");
+        // Lost / refused registration — surface so the UI can show "failed".
+        console.warn("[SipTransport] registration lost or refused");
+        this.events.emit("error", {
+          message: "SIP registration refused — check username/password/domain",
+        });
       }
     });
-    await this.registerer.register();
+    await this.registerer.register({
+      requestDelegate: {
+        onReject: (response) => {
+          const sc = response?.message?.statusCode;
+          const rp = response?.message?.reasonPhrase;
+          this.events.emit("error", {
+            message: `SIP REGISTER rejected${sc ? ` (${sc}${rp ? ` ${rp}` : ""})` : ""}`,
+          });
+        },
+      },
+    });
   }
 
   async disconnect(): Promise<void> {
