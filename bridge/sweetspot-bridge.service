@@ -1,0 +1,19 @@
+[Unit]
+Description=Sweet Spot voice bridge (Asterisk ARI <-> OpenAI Realtime)
+After=network-online.target asterisk.service
+Wants=network-online.target
+Requires=asterisk.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sweetspot/.env
+WorkingDirectory=/opt/sweetspot-bridge
+ExecStart=/usr/bin/node /opt/sweetspot-bridge/server.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+User=root
+
+[Install]
+WantedBy=multi-user.target
