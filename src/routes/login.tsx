@@ -1,7 +1,6 @@
-import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,11 +46,6 @@ function LoginPage() {
     }
   };
 
-  const google = async () => {
-    const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin });
-    if (result.error) toast.error("Google sign-in failed");
-  };
-
   return (
     <div className="min-h-screen grid place-items-center bg-muted/30 p-6">
       <Card className="w-full max-w-sm">
@@ -73,10 +67,6 @@ function LoginPage() {
               {busy ? "..." : mode === "signin" ? "Sign in" : "Create account"}
             </Button>
           </form>
-          <div className="my-4 text-center text-xs text-muted-foreground">or</div>
-          <Button variant="outline" className="w-full" onClick={google} disabled={busy}>
-            Continue with Google
-          </Button>
           <button
             type="button"
             className="mt-4 w-full text-xs text-muted-foreground hover:text-foreground"
@@ -89,7 +79,3 @@ function LoginPage() {
     </div>
   );
 }
-
-// satisfy unused-import lint when redirect isn't called from this file
-export const _r = redirect;
-export const _l = Link;
