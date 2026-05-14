@@ -67,6 +67,7 @@ export class SipTransport implements Transport {
   private mutedMicTrack: MediaStreamTrack | null = null;
   private registerAccepted = false;
   private registrationFailureTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopping = false;
 
   constructor(
     private readonly cfg: SipConfig,
@@ -96,6 +97,7 @@ export class SipTransport implements Transport {
       logLevel: "warn",
       delegate: {
         onDisconnect: (err) => {
+          if (this.stopping) return;
           this.events.emit("error", {
             message: `SIP WebSocket disconnected: ${err?.message ?? "unknown reason"}`,
           });
@@ -147,12 +149,14 @@ export class SipTransport implements Transport {
   }
 
   async disconnect(): Promise<void> {
+    this.stopping = true;
     await this.hangup();
     this.clearRegistrationFailureTimer();
     try { await this.registerer?.unregister(); } catch { /* noop */ }
     try { await this.ua?.stop(); } catch { /* noop */ }
     this.registerer = null;
     this.ua = null;
+    this.stopping = false;
   }
 
   /**
@@ -161,12 +165,14 @@ export class SipTransport implements Transport {
    * so the UI/CallSession stay wired through a credential change.
    */
   async reconnect(): Promise<void> {
+    this.stopping = true;
     await this.hangup();
     this.clearRegistrationFailureTimer();
     try { await this.registerer?.unregister(); } catch { /* noop */ }
     try { await this.ua?.stop(); } catch { /* noop */ }
     this.registerer = null;
     this.ua = null;
+    this.stopping = false;
     await this.connect();
   }
 
