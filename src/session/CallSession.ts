@@ -106,7 +106,7 @@ export class CallSession {
   // ─── Wiring ───────────────────────────────────────────────────────────────
   private wire(): void {
     this.listeners.push(
-      this.transport.events.on("ready", () => this.transition("ready")),
+      this.transport.events.on("ready", () => this.update({ phase: "ready", error: null })),
       this.transport.events.on("incoming", (e) => void this.onIncoming(e.caller, e.accept)),
       this.transport.events.on("ended", () => void this.onCallEnded()),
       this.transport.events.on("error", (e) => this.fail(e.message)),
