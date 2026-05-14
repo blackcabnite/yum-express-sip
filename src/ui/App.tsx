@@ -140,10 +140,10 @@ export default function App(): React.ReactElement {
           </p>
         </div>
         <div className="cta">
-          {mode === "mock" && state.phase === "ready" && (
+          {mode === "mock" && !inCall && (
             <button className="btn primary" onClick={startMockCall}>Start mock call</button>
           )}
-          {mode === "sip" && state.phase === "ready" && (
+          {mode === "sip" && !inCall && (
             <span className="awaiting">awaiting call…</span>
           )}
           {inCall && <button className="btn" onClick={() => void transport.hangup()}>Hang up</button>}
