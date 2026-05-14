@@ -93,8 +93,6 @@ export class CallSession {
   }
 
   async stop(): Promise<void> {
-    for (const off of this.listeners) off();
-    this.listeners = [];
     this.clearHangupTimer();
     try { await this.realtime.stop(); } catch { /* noop */ }
     try { await this.transport.disconnect(); } catch { /* noop */ }
