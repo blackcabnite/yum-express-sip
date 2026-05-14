@@ -216,15 +216,39 @@ export class SipTransport implements Transport {
    */
   sendOutboundAudio(track: MediaStreamTrack): void {
     const pc = this.currentPc;
-    if (!pc) return;
-    const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
+    if (!pc) {
+      console.warn("[SipTransport] sendOutboundAudio called with no current PC");
+      return;
+    }
+    const transceiver = pc.getTransceivers().find(
+      (t) => t.sender.track?.kind === "audio" || t.receiver.track?.kind === "audio",
+    );
+    const sender = transceiver?.sender ?? pc.getSenders().find((s) => s.track?.kind === "audio");
     if (!sender) {
       this.events.emit("error", { message: "No audio sender on SIP PC — cannot route AI voice" });
       return;
     }
-    void sender.replaceTrack(track).catch((err: Error) => {
-      this.events.emit("error", { message: `replaceTrack failed: ${err.message}` });
+    // Make sure the AI track is enabled — OpenAI tracks usually are, but
+    // an inherited disabled state would silently drop audio to the caller.
+    track.enabled = true;
+    console.log("[SipTransport] routing AI audio to SIP PC", {
+      trackId: track.id,
+      trackEnabled: track.enabled,
+      trackMuted: track.muted,
+      trackReadyState: track.readyState,
+      transceiverDirection: transceiver?.direction,
+      transceiverCurrentDirection: transceiver?.currentDirection,
     });
+    // Asterisk sometimes offers recvonly/inactive on the WebRTC leg; force
+    // sendrecv so our outbound AI audio is actually transmitted.
+    if (transceiver && transceiver.direction !== "sendrecv") {
+      try { transceiver.direction = "sendrecv"; } catch { /* noop */ }
+    }
+    void sender.replaceTrack(track)
+      .then(() => console.log("[SipTransport] replaceTrack OK — AI audio is live"))
+      .catch((err: Error) => {
+        this.events.emit("error", { message: `replaceTrack failed: ${err.message}` });
+      });
     // We no longer need the muted mic track once the AI track is in place.
     if (this.mutedMicTrack) {
       try { this.mutedMicTrack.stop(); } catch { /* noop */ }
