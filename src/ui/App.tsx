@@ -121,6 +121,7 @@ export default function App(): React.ReactElement {
   // Mock-only: simulate an incoming call. SIP calls just arrive.
   const startMockCall = (): void => {
     if (transport instanceof MockTransport) {
+      transport.primeAudio();
       transport.startMockCall("Demo caller");
     }
   };
