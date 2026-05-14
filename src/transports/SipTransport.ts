@@ -139,6 +139,20 @@ export class SipTransport implements Transport {
     this.events.clear();
   }
 
+  /**
+   * Tear down the current UA + registration and re-run connect().
+   * Preserves event subscribers (unlike disconnect, which clears them),
+   * so the UI/CallSession stay wired through a credential change.
+   */
+  async reconnect(): Promise<void> {
+    await this.hangup();
+    try { await this.registerer?.unregister(); } catch { /* noop */ }
+    try { await this.ua?.stop(); } catch { /* noop */ }
+    this.registerer = null;
+    this.ua = null;
+    await this.connect();
+  }
+
   async hangup(): Promise<void> {
     if (this.currentInvitation) {
       await safeBye(this.currentInvitation);
