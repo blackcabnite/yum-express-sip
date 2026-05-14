@@ -4,7 +4,7 @@ import * as React from "react";
 // Selects MockTransport or SipTransport based on VITE_TRANSPORT env var.
 // State lives in CallSession; this component renders snapshots.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MENU } from "@/domain/menu";
 import { MenuLookup } from "@/domain/MenuLookup";
 import { formatPence } from "@/domain/OrderEngine";
@@ -91,6 +91,23 @@ function buildTransport(): { transport: Transport; mode: TransportMode } {
 export default function App(): React.ReactElement {
   const { transport, mode } = useMemo(() => buildTransport(), []);
 
+  type SipStatus = "idle" | "connecting" | "registered" | "failed";
+  const [sipStatus, setSipStatus] = useState<SipStatus>(mode === "sip" ? "connecting" : "idle");
+  const [sipError, setSipError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== "sip") return;
+    const offReg = transport.events.on("registered", () => {
+      setSipStatus("registered");
+      setSipError(null);
+    });
+    const offErr = transport.events.on("error", ({ message }) => {
+      setSipStatus("failed");
+      setSipError(message);
+    });
+    return () => { offReg(); offErr(); };
+  }, [transport, mode]);
+
   const session = useMemo(() => {
     const realtime = new RealtimeSession(
       {
@@ -132,6 +149,12 @@ export default function App(): React.ReactElement {
           <p className="subtitle">
             FSM-driven voice ordering — <span className="transport-tag">{mode}</span> transport · OpenAI Realtime
           </p>
+          {mode === "sip" && (
+            <p className="sip-status" data-status={sipStatus}>
+              SIP: <strong>{sipStatus}</strong>
+              {sipStatus === "failed" && sipError ? ` — ${sipError}` : ""}
+            </p>
+          )}
         </div>
         <div className="cta">
           {mode === "mock" && !inCall && (
