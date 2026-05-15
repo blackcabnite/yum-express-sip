@@ -47,6 +47,10 @@ function OrdersPage() {
   const codecM = useMutation({
     mutationFn: (mode: "opus" | "g722") => writeCodec({ data: { mode } }),
     onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(`Switch failed: ${res.error}`);
+        return;
+      }
       toast.success(`Codec switched to ${res.mode.toUpperCase()}`);
       qc.invalidateQueries({ queryKey: ["codec_mode"] });
     },
@@ -86,7 +90,11 @@ function OrdersPage() {
         <CardHeader className="py-3 border-b flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-sm font-medium">Audio codec (Asterisk)</CardTitle>
           <span className="text-xs text-muted-foreground">
-            {codecQ.isLoading ? "checking…" : codecQ.error ? "bridge unreachable" : `active: ${mode.toUpperCase()}`}
+            {codecQ.isLoading
+              ? "checking…"
+              : codecQ.error
+                ? "bridge unreachable"
+                : `active: ${mode.toUpperCase()}`}
           </span>
         </CardHeader>
         <CardContent className="p-4 flex items-center gap-2">
@@ -106,7 +114,9 @@ function OrdersPage() {
           >
             G.722 / default
           </Button>
-          {codecM.isPending && <span className="text-xs text-muted-foreground ml-2">reloading Asterisk…</span>}
+          {codecM.isPending && (
+            <span className="text-xs text-muted-foreground ml-2">reloading Asterisk…</span>
+          )}
         </CardContent>
       </Card>
 
@@ -128,19 +138,32 @@ function OrdersPage() {
               {ordersQ.data.map((o) => {
                 const items = (Array.isArray(o.items) ? o.items : []) as OrderItem[];
                 return (
-                  <li key={o.id} className="px-4 py-3 grid gap-2 lg:grid-cols-[120px_1fr_auto] lg:items-center">
+                  <li
+                    key={o.id}
+                    className="px-4 py-3 grid gap-2 lg:grid-cols-[120px_1fr_auto] lg:items-center"
+                  >
                     <div className="text-xs text-muted-foreground tabular-nums">
                       {new Date(o.created_at).toLocaleString()}
                     </div>
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">
                         {o.customer_name ?? "Unknown"} · {o.caller_msisdn ?? "private"}
-                        {o.receipt_no ? <span className="text-muted-foreground font-normal"> · #{o.receipt_no}</span> : null}
+                        {o.receipt_no ? (
+                          <span className="text-muted-foreground font-normal">
+                            {" "}
+                            · #{o.receipt_no}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground truncate">
                         {items.length === 0
                           ? "(no items)"
-                          : items.map((i) => `${i.qty ?? 1}× ${i.base ?? "item"}${i.size ? ` (${i.size})` : ""}`).join(", ")}
+                          : items
+                              .map(
+                                (i) =>
+                                  `${i.qty ?? 1}× ${i.base ?? "item"}${i.size ? ` (${i.size})` : ""}`,
+                              )
+                              .join(", ")}
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -148,7 +171,9 @@ function OrdersPage() {
                         {o.whatsapp_sent_at && <Badge variant="secondary">WhatsApp</Badge>}
                         {o.dispatched_at && <Badge variant="secondary">Dispatched</Badge>}
                       </div>
-                      <div className="font-medium tabular-nums w-20 text-right">{fmtPence(o.total_pence)}</div>
+                      <div className="font-medium tabular-nums w-20 text-right">
+                        {fmtPence(o.total_pence)}
+                      </div>
                     </div>
                   </li>
                 );
