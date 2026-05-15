@@ -93,9 +93,17 @@ export const setCodecMode = createServerFn({ method: "POST" })
         log?: string;
       };
       if (!res.ok || !json.ok) {
-        return { ok: false as const, mode: "unknown" as const, error: json.log || `bridge ${res.status}` };
+        return {
+          ok: false as const,
+          mode: "unknown" as const,
+          error: json.log || `bridge ${res.status}`,
+        };
       }
-      return { ok: true as const, mode: (json.mode as "opus" | "g722" | "unknown") ?? "unknown", log: json.log };
+      return {
+        ok: true as const,
+        mode: (json.mode as "opus" | "g722" | "unknown") ?? "unknown",
+        log: json.log,
+      };
     } catch (error) {
       console.error("Codec bridge update failed", error);
       return { ok: false as const, mode: "unknown" as const, error: bridgeErrorMessage(error) };
