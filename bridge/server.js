@@ -78,8 +78,7 @@ async function handleCall(ari, channel) {
   console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
 
   let remote = null;
-  let remotePt = 118;
-  let learnedInboundPt = false;
+  const remotePt = 118; // slin16 dynamic PT — must match externalMedia format
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
@@ -227,19 +226,12 @@ async function handleCall(ari, channel) {
     rxBytes = 0; rxPackets = 0;
   }, 5000);
   sock.on("message", (pkt, rinfo) => {
-    const pktPt = pkt.length >= 2 ? pkt[1] & 0x7f : null;
-    if (pktPt !== null && !learnedInboundPt) {
-      learnedInboundPt = true;
-      remotePt = pktPt;
-      console.log(`[rtp] learned inbound PT=${remotePt}; using same PT for bridge→caller audio`);
-    }
-    if (!remote || (remote.address === "127.0.0.1" && remote.port !== rinfo.port)) {
+    // Do NOT overwrite `remote` from rinfo — Asterisk's externalMedia tells us
+    // the exact destination via UNICASTRTP_LOCAL_ADDRESS/PORT. Inbound packets
+    // may originate from a different ephemeral port and would mis-route TX audio.
+    if (!remote) {
       remote = rinfo;
-      console.log(
-        `[rtp] inbound remote ${rinfo.address}:${rinfo.port} pt=${remotePt} ` +
-        `(118=slin16, 96-127=dynamic). First payload=${(rtpPayload(pkt)||[]).length}B ` +
-        `(expect 640 for slin16@16k/20ms)`
-      );
+      console.log(`[rtp] no seeded remote; falling back to inbound source ${rinfo.address}:${rinfo.port}`);
     }
     const payload = rtpPayload(pkt);
     if (payload && payload.length) {
@@ -249,7 +241,10 @@ async function handleCall(ari, channel) {
     }
   });
 
+  let cleaned = false;
   const cleanup = async (why) => {
+    if (cleaned) return;
+    cleaned = true;
     console.log(`[call] end ch=${channel.id} (${why}) · sent ${outboundCount}p queued=${outQueue.length} dropped=${droppedFrames}`);
     clearInterval(rxTimer);
     if (pacerTimer) clearInterval(pacerTimer);
@@ -257,8 +252,8 @@ async function handleCall(ari, channel) {
     try { sock.close(); } catch {}
     try { await bridge.destroy(); } catch {}
     try { await externalChan.hangup(); } catch {}
-    await logEvent(state.sessionId, "call_end", why);
-    await endSession(state.sessionId);
+    try { await logEvent(state.sessionId, "call_end", why); } catch {}
+    try { await endSession(state.sessionId); } catch {}
   };
   channel.once("StasisEnd", () => cleanup("caller_hangup"));
   externalChan.once("StasisEnd", () => cleanup("media_end"));
