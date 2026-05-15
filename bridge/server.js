@@ -16,8 +16,8 @@ const APP_NAME = "sweetspot";
 const PUBLIC_HOST = process.env.PUBLIC_HOST || "127.0.0.1";
 const RTP_PORT_BASE = 14000;
 const FRAME_MS = 20;
-const FRAME_SAMPLES = 320;          // 16kHz × 20ms = 320 samples
-const FRAME_BYTES = 640;            // 320 samples × 2 bytes/sample
+const FRAME_SAMPLES = 480;          // 24kHz × 20ms = 480 samples
+const FRAME_BYTES = 960;            // 480 samples × 2 bytes/sample (slin24)
 const MAX_QUEUE_FRAMES = 500;       // ~10s — OpenAI delivers in big bursts; need headroom
 let nextPort = RTP_PORT_BASE;
 
@@ -78,7 +78,10 @@ async function handleCall(ari, channel) {
   console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
 
   let remote = null;
-  const remotePt = 118; // slin16 dynamic PT — must match externalMedia format
+  // Learn outbound PT from the first inbound packet — Asterisk's dynamic PT
+  // for slin24 isn't fixed across versions; honour what it actually sends.
+  let remotePt = 118;
+  let remotePtLearned = false;
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
@@ -88,7 +91,7 @@ async function handleCall(ari, channel) {
     externalChan = await ari.channels.externalMedia({
       app: APP_NAME,
       external_host: `${PUBLIC_HOST}:${localPort}`,
-      format: "slin16",
+      format: "slin24",
     });
     console.log(`[ari] externalMedia ${externalChan.id} → ${PUBLIC_HOST}:${localPort}`);
   } catch (e) {
@@ -226,6 +229,11 @@ async function handleCall(ari, channel) {
     rxBytes = 0; rxPackets = 0;
   }, 5000);
   sock.on("message", (pkt, rinfo) => {
+    if (!remotePtLearned && pkt.length >= 2) {
+      remotePt = pkt[1] & 0x7f;
+      remotePtLearned = true;
+      console.log(`[rtp] learned outbound_pt=${remotePt} from first inbound packet`);
+    }
     // Do NOT overwrite `remote` from rinfo — Asterisk's externalMedia tells us
     // the exact destination via UNICASTRTP_LOCAL_ADDRESS/PORT. Inbound packets
     // may originate from a different ephemeral port and would mis-route TX audio.
