@@ -85,6 +85,30 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
       case "response.audio.delta": {
         const pcm24 = Buffer.from(msg.delta, "base64");
         const pcm16 = resamplePCM16(pcm24, 24000, 16000);
+        // ── AUDIO PATH DEBUG (model → bridge) ─────────────────────────
+        // OpenAI Realtime emits PCM16 LE @ 24kHz. We resample to 16kHz
+        // (slin16) before pushing into the RTP pacer.
+        if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
+        const d = openOpenAIRealtime._audDbg;
+        d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
+        if (d.n <= 3) {
+          const inSamples = pcm24.length / 2;
+          const outSamples = pcm16.length / 2;
+          console.log(
+            `[ai-audio] delta#${d.n} src=PCM16@24k bytes=${pcm24.length} samples=${inSamples} ms=${(inSamples/24).toFixed(1)} ` +
+            `→ resampled=PCM16@16k bytes=${pcm16.length} samples=${outSamples} ms=${(outSamples/16).toFixed(1)} ` +
+            `frames20ms=${(pcm16.length/640).toFixed(2)}`
+          );
+        }
+        const dt = Date.now() - d.t0;
+        if (dt >= 5000) {
+          console.log(
+            `[ai-audio] 5s summary deltas=${d.n} in=${d.bytesIn}B@24k (${(d.bytesIn/2/24/1000).toFixed(2)}s audio) ` +
+            `out=${d.bytesOut}B@16k (${(d.bytesOut/2/16/1000).toFixed(2)}s audio) ` +
+            `rate=${(d.n/(dt/1000)).toFixed(1)} deltas/s`
+          );
+          d.n = 0; d.bytesIn = 0; d.bytesOut = 0; d.t0 = Date.now();
+        }
         onAudioToCaller(pcm16);
         break;
       }
