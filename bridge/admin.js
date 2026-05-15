@@ -16,7 +16,7 @@ const SCRIPT = path.join(__dirname, "asterisk", "switch-codec.sh");
 
 function runScript(arg) {
   return new Promise((resolve) => {
-    execFile("sudo", ["-n", SCRIPT, arg], { timeout: 15000 }, (err, stdout, stderr) => {
+    execFile("sudo", ["-n", "/usr/bin/env", "bash", SCRIPT, arg], { timeout: 15000 }, (err, stdout, stderr) => {
       resolve({ ok: !err, code: err?.code ?? 0, stdout: String(stdout || ""), stderr: String(stderr || err?.message || "") });
     });
   });
