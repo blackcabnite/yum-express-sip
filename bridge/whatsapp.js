@@ -1,6 +1,15 @@
 // WhatsApp Business Cloud API — send text messages to owner + customer
 const GRAPH = "https://graph.facebook.com/v21.0";
 
+function normalizeMsisdn(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/[^\d]/g, "");
+  if (!digits) return null;
+  // Meta accepts E.164 with leading '+'. Strip leading 0s/00s if present.
+  const trimmed = digits.replace(/^0+/, "");
+  return "+" + trimmed;
+}
+
 async function sendText(to, body) {
   const phoneId = process.env.WA_PHONE_ID;
   const token = process.env.WA_TOKEN;
@@ -8,18 +17,23 @@ async function sendText(to, body) {
     console.warn("[wa] WA_PHONE_ID/WA_TOKEN not set — skipping send to", to);
     return null;
   }
+  const normalized = normalizeMsisdn(to);
+  if (!normalized) {
+    console.warn("[wa] skip send: empty/invalid msisdn", to);
+    return null;
+  }
   const res = await fetch(`${GRAPH}/${phoneId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       messaging_product: "whatsapp",
-      to: String(to).replace(/[^\d]/g, ""),
+      to: normalized,
       type: "text",
       text: { body },
     }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) console.error("[wa] send failed", res.status, JSON.stringify(json));
+  if (!res.ok) console.error("[wa] send failed", res.status, "to=", normalized, JSON.stringify(json));
   return json;
 }
 
