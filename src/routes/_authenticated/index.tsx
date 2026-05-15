@@ -10,6 +10,7 @@ import { Phone, User, Clock } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/")({
   component: CallsDashboard,
+  ssr: false,
 });
 
 type CallSession = {
