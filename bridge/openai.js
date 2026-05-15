@@ -27,23 +27,44 @@ function systemPrompt() {
   ].join("\n");
 }
 
-// Linear resampling between 16k and 24k (PCM16 LE).
-function resamplePCM16(input, fromRate, toRate) {
-  if (fromRate === toRate) return input;
+// Stateful linear resampler (PCM16 LE). Keeps the last input sample and a
+// fractional read position across calls so chunk boundaries don't click.
+// Returns { out, state } where state must be passed back in next call.
+function resamplePCM16(input, fromRate, toRate, state) {
+  if (fromRate === toRate) return { out: input, state };
   const inSamples = input.length / 2;
-  const outSamples = Math.floor(inSamples * toRate / fromRate);
+  if (inSamples === 0) return { out: Buffer.alloc(0), state };
+  const ratio = fromRate / toRate;            // input samples per output sample
+  const s = state || { pos: 0, last: 0 };     // pos is fractional index into "virtual" stream that includes prev.last at index -1
+  // Build a small helper: sample at integer index i where -1 returns s.last
+  const readAt = (i) => {
+    if (i < 0) return s.last;
+    if (i >= inSamples) return input.readInt16LE((inSamples - 1) * 2);
+    return input.readInt16LE(i * 2);
+  };
+  // Determine how many output samples we can produce while staying within available input.
+  // pos starts somewhere in [0, 1). Last usable srcF is inSamples - 1 (so i1 = inSamples-1).
+  const outSamples = Math.max(0, Math.floor((inSamples - 1 - s.pos) / ratio) + 1);
   const out = Buffer.alloc(outSamples * 2);
-  const ratio = inSamples / outSamples;
   for (let i = 0; i < outSamples; i++) {
-    const srcF = i * ratio;
+    const srcF = s.pos + i * ratio;
     const i0 = Math.floor(srcF);
-    const i1 = Math.min(i0 + 1, inSamples - 1);
+    const i1 = i0 + 1;
     const t = srcF - i0;
-    const s0 = input.readInt16LE(i0 * 2);
-    const s1 = input.readInt16LE(i1 * 2);
-    out.writeInt16LE(Math.round(s0 * (1 - t) + s1 * t), i * 2);
+    const v = Math.round(readAt(i0) * (1 - t) + readAt(i1) * t);
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, v)), i * 2);
   }
-  return out;
+  // Advance position past consumed input; carry remainder into next call.
+  const consumedF = s.pos + outSamples * ratio;
+  const newState = {
+    pos: consumedF - inSamples,               // negative → next call's pos relative to its input start
+    last: input.readInt16LE((inSamples - 1) * 2),
+  };
+  // Normalize: pos should be in [0, 1) at start of next chunk. Because we read
+  // s.last at index -1, a pos of e.g. -0.3 means "next output sits 0.3 samples
+  // before the new chunk's first sample" → represent as pos=0.7 with last=prev.
+  if (newState.pos < 0) newState.pos = newState.pos + 1; // shift by 1 sample (the carried last)
+  return { out, state: newState };
 }
 
 export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
@@ -54,7 +75,13 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
     },
   });
 
-  let audioOutBuf = []; // queued PCM16 24k chunks from model
+  // Per-direction resampler state (carried across deltas to avoid boundary clicks).
+  let downState = null;   // 24k → 16k (model → caller)
+  let upState = null;     // 16k → 24k (caller → model)
+  // Skip first ~40ms of each model response — OpenAI's first delta sometimes
+  // contains a brief audio glitch (pop/click) before the voice properly starts.
+  const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
+  let skipRemaining = 0;
 
   ws.on("open", () => {
     ws.send(JSON.stringify({
@@ -83,10 +110,19 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
     switch (msg.type) {
       case "response.audio.delta": {
-        const pcm24 = Buffer.from(msg.delta, "base64");
+        let pcm24 = Buffer.from(msg.delta, "base64");
+        if (skipRemaining > 0) {
+          const drop = Math.min(skipRemaining, pcm24.length);
+          pcm24 = pcm24.slice(drop);
+          skipRemaining -= drop;
+          if (pcm24.length === 0) break;
+        }
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
-        const pcm16 = resamplePCM16(pcm24, 24000, 16000);
+        const r = resamplePCM16(pcm24, 24000, 16000, downState);
+        downState = r.state;
+        const pcm16 = r.out;
+        if (pcm16.length === 0) break;
         if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
         const d = openOpenAIRealtime._audDbg;
         d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
@@ -105,6 +141,13 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
           d.n = 0; d.bytesIn = 0; d.bytesOut = 0; d.t0 = Date.now();
         }
         onAudioToCaller(pcm16);
+        break;
+      }
+      case "response.created": {
+        // New response starting — arm the leading-glitch skip and reset
+        // resampler state so we don't interpolate into stale samples.
+        skipRemaining = SKIP_BYTES_PER_RESPONSE;
+        downState = null;
         break;
       }
       case "response.audio_transcript.done": {
@@ -152,7 +195,10 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
     pushCallerAudio(pcm16Slin) {
       if (ws.readyState !== WebSocket.OPEN) return;
       // Asterisk sends slin16 (PCM16 LE @ 16kHz). Resample up to 24kHz for OpenAI Realtime.
-      const pcm24 = resamplePCM16(pcm16Slin, 16000, 24000);
+      const r = resamplePCM16(pcm16Slin, 16000, 24000, upState);
+      upState = r.state;
+      const pcm24 = r.out;
+      if (pcm24.length === 0) return;
       ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm24.toString("base64") }));
     },
     close() { try { ws.close(); } catch {} },
