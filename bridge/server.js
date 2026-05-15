@@ -64,6 +64,7 @@ async function handleCall(ari, channel) {
 
   let remote = null;
   let remotePt = 118; // Asterisk's slin16 dynamic PT — learned from first inbound packet
+  let outboundPcm = Buffer.alloc(0);
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
@@ -93,11 +94,12 @@ async function handleCall(ari, channel) {
     state,
     onAudioToCaller(pcm16Slin) {
       if (!remote) return;
+      outboundPcm = Buffer.concat([outboundPcm, pcm16Slin]);
       // Chunk to 20ms frames @ 16kHz = 320 samples = 640 bytes.
       const FRAME = 640;
-      for (let off = 0; off < pcm16Slin.length; off += FRAME) {
-        const slice = pcm16Slin.slice(off, off + FRAME);
-        if (slice.length < FRAME) break;
+      while (outboundPcm.length >= FRAME) {
+        const slice = outboundPcm.slice(0, FRAME);
+        outboundPcm = outboundPcm.slice(FRAME);
         const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
         ts = (ts + 320) >>> 0;
         sock.send(pkt, remote.port, remote.address, (e) => { if (e) console.error("[rtp] send", e.message); });
