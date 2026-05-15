@@ -1,8 +1,10 @@
 // Sweet Spot voice bridge: Asterisk ARI <-> OpenAI Realtime.
+// PATCH: paces outbound RTP at exactly 20ms intervals. OpenAI delivers audio
+// in bursts (10-20 frames at a time); without pacing Asterisk's jitter buffer
+// overflows and most audio gets dropped before reaching Meta.
 import "dotenv/config";
 import ariClient from "ari-client";
 import dgram from "node:dgram";
-import net from "node:net";
 import { createSession, endSession, logEvent } from "./supabase.js";
 import { newCallState } from "./tools.js";
 import { openOpenAIRealtime } from "./openai.js";
@@ -11,8 +13,12 @@ const ARI_URL = process.env.ARI_URL || "http://127.0.0.1:8088";
 const ARI_USER = process.env.ARI_USER || "sweetspot";
 const ARI_PASS = process.env.ARI_PASS;
 const APP_NAME = "sweetspot";
-const PUBLIC_HOST = process.env.PUBLIC_HOST || "127.0.0.1"; // Asterisk reaches us here
+const PUBLIC_HOST = process.env.PUBLIC_HOST || "127.0.0.1";
 const RTP_PORT_BASE = 14000;
+const FRAME_MS = 20;
+const FRAME_SAMPLES = 320;          // 16kHz × 20ms = 320 samples
+const FRAME_BYTES = 640;            // 320 samples × 2 bytes/sample
+const MAX_QUEUE_FRAMES = 50;        // ~1s — beyond this, drop oldest to keep latency bounded
 let nextPort = RTP_PORT_BASE;
 
 function pickRtpPort() {
@@ -22,7 +28,6 @@ function pickRtpPort() {
   return p;
 }
 
-// Strip 12-byte RTP header → return PCM16 payload (slin16).
 function rtpPayload(pkt) {
   if (pkt.length < 12) return null;
   const cc = pkt[0] & 0x0f;
@@ -35,7 +40,6 @@ function rtpPayload(pkt) {
   return pkt.slice(off);
 }
 
-// Build a minimal RTP packet for slin16 (96 dynamic) — Asterisk ExternalMedia accepts this fine.
 function buildRtpPacket({ seq, ts, ssrc, payload, pt = 96 }) {
   const hdr = Buffer.alloc(12);
   hdr[0] = 0x80;
@@ -46,6 +50,17 @@ function buildRtpPacket({ seq, ts, ssrc, payload, pt = 96 }) {
   return Buffer.concat([hdr, payload]);
 }
 
+async function getChannelVar(ari, channelId, variable, retries = 8) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const r = await ari.channels.getChannelVar({ channelId, variable });
+      if (r?.value) return r.value;
+    } catch {}
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  return null;
+}
+
 async function handleCall(ari, channel) {
   const callerMsisdn = channel.caller?.number || null;
   console.log(`[call] start ch=${channel.id} caller=${callerMsisdn}`);
@@ -54,22 +69,20 @@ async function handleCall(ari, channel) {
   const state = newCallState({ sessionId: session.id, callerMsisdn });
   await logEvent(session.id, "call_start", null, { channel_id: channel.id, caller: callerMsisdn });
 
-  // 1) Open UDP socket for our side of the external-media RTP.
   const localPort = pickRtpPort();
   const sock = dgram.createSocket("udp4");
   await new Promise((res, rej) => {
     sock.once("error", rej);
     sock.bind(localPort, "0.0.0.0", () => res());
   });
+  console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
 
   let remote = null;
-  let remotePt = 118; // Asterisk's slin16 dynamic PT — learned from first inbound packet
-  let outboundPcm = Buffer.alloc(0);
+  let remotePt = 118;
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
 
-  // 2) Create the ExternalMedia channel (Asterisk dials us back over RTP).
   let externalChan;
   try {
     externalChan = await ari.channels.externalMedia({
@@ -77,6 +90,7 @@ async function handleCall(ari, channel) {
       external_host: `${PUBLIC_HOST}:${localPort}`,
       format: "slin16",
     });
+    console.log(`[ari] externalMedia ${externalChan.id} → ${PUBLIC_HOST}:${localPort}`);
   } catch (e) {
     console.error("[call] externalMedia failed", e.message);
     await channel.hangup().catch(() => {});
@@ -84,42 +98,95 @@ async function handleCall(ari, channel) {
     return;
   }
 
-  // 3) Bridge the caller channel <-> external-media channel.
+  // Seed remote destination so we can send audio before any caller-side RTP arrives.
+  try {
+    const remoteAddr = (await getChannelVar(ari, externalChan.id, "UNICASTRTP_LOCAL_ADDRESS")) || "127.0.0.1";
+    const remotePort = await getChannelVar(ari, externalChan.id, "UNICASTRTP_LOCAL_PORT");
+    if (remotePort) {
+      remote = { address: remoteAddr, port: parseInt(remotePort, 10) };
+      console.log(`[rtp] seeded remote ${remote.address}:${remote.port}`);
+    }
+  } catch (e) {
+    console.warn(`[rtp] channelvar lookup failed: ${e.message}`);
+  }
+
   const bridge = ari.Bridge();
   await bridge.create({ type: "mixing" });
   await bridge.addChannel({ channel: [channel.id, externalChan.id] });
 
-  // 4) OpenAI Realtime session — pipes audio both ways.
+  // ─── PACED OUTBOUND RTP ─────────────────────────────────────────────────
+  // Buffer 640-byte slin16 frames; emit one every 20ms via a self-correcting
+  // timer. OpenAI delivers audio in bursts; Asterisk's jitter buffer drops
+  // packets that arrive faster than playout rate. Without this fix, most of
+  // the model's audio never reaches the caller — they hear comfort noise.
+  const outQueue = [];
+  let droppedFrames = 0;
+  let nextSendAt = null;
+  let pacerTimer = null;
+  let outboundCount = 0;
+  let firstSentLogged = false;
+
+  function enqueueOutbound(pcm16Slin) {
+    for (let off = 0; off < pcm16Slin.length; off += FRAME_BYTES) {
+      const slice = pcm16Slin.slice(off, off + FRAME_BYTES);
+      if (slice.length < FRAME_BYTES) break;
+      if (outQueue.length >= MAX_QUEUE_FRAMES) {
+        outQueue.shift();
+        droppedFrames++;
+      }
+      outQueue.push(slice);
+    }
+    startPacer();
+  }
+
+  function startPacer() {
+    if (pacerTimer) return;
+    nextSendAt = Date.now();
+    pacerTimer = setInterval(() => {
+      if (!remote) return;
+      const now = Date.now();
+      let sent = 0;
+      while (outQueue.length > 0 && now >= nextSendAt && sent < 5) {
+        const slice = outQueue.shift();
+        const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
+        ts = (ts + FRAME_SAMPLES) >>> 0;
+        sock.send(pkt, remote.port, remote.address, (e) => {
+          if (e) console.error("[rtp] send err", e.message);
+        });
+        outboundCount++;
+        sent++;
+        if (!firstSentLogged) {
+          console.log(`[rtp] FIRST paced packet sent to ${remote.address}:${remote.port}`);
+          firstSentLogged = true;
+        }
+        nextSendAt += FRAME_MS;
+      }
+      if (outQueue.length === 0) {
+        nextSendAt = Date.now();
+      }
+    }, 5);
+  }
+
   const oa = openOpenAIRealtime({
     state,
     onAudioToCaller(pcm16Slin) {
       if (!remote) return;
-      outboundPcm = Buffer.concat([outboundPcm, pcm16Slin]);
-      // Chunk to 20ms frames @ 16kHz = 320 samples = 640 bytes.
-      const FRAME = 640;
-      while (outboundPcm.length >= FRAME) {
-        const slice = outboundPcm.slice(0, FRAME);
-        outboundPcm = outboundPcm.slice(FRAME);
-        const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
-        ts = (ts + 320) >>> 0;
-        sock.send(pkt, remote.port, remote.address, (e) => { if (e) console.error("[rtp] send", e.message); });
-      }
+      enqueueOutbound(pcm16Slin);
     },
-    onClose() { /* handled by hangup */ },
+    onClose() {},
   });
 
-  // 5) Caller audio in → OpenAI.
   let rxBytes = 0;
   let rxPackets = 0;
   const rxTimer = setInterval(() => {
-    if (rxPackets) console.log(`[rtp] caller→bridge ${rxPackets} pkts / ${rxBytes} bytes (last 5s)`);
+    console.log(`[rtp] hb caller→bridge ${rxPackets}p ${rxBytes}b | bridge→caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped`);
     rxBytes = 0; rxPackets = 0;
   }, 5000);
   sock.on("message", (pkt, rinfo) => {
-    if (!remote) {
+    if (!remote || (remote.address === "127.0.0.1" && remote.port !== rinfo.port)) {
       remote = rinfo;
       if (pkt.length >= 2) remotePt = pkt[1] & 0x7f;
-      console.log(`[rtp] remote ${rinfo.address}:${rinfo.port} pt=${remotePt}`);
+      console.log(`[rtp] inbound remote ${rinfo.address}:${rinfo.port} pt=${remotePt}`);
     }
     const payload = rtpPayload(pkt);
     if (payload && payload.length) {
@@ -129,10 +196,10 @@ async function handleCall(ari, channel) {
     }
   });
 
-  // 6) Cleanup on hangup.
   const cleanup = async (why) => {
-    console.log(`[call] end ch=${channel.id} (${why})`);
+    console.log(`[call] end ch=${channel.id} (${why}) · sent ${outboundCount}p queued=${outQueue.length} dropped=${droppedFrames}`);
     clearInterval(rxTimer);
+    if (pacerTimer) clearInterval(pacerTimer);
     try { oa.close(); } catch {}
     try { sock.close(); } catch {}
     try { await bridge.destroy(); } catch {}
@@ -153,7 +220,6 @@ async function main() {
 
   const ari = await ariClient.connect(ARI_URL, ARI_USER, ARI_PASS);
   ari.on("StasisStart", (event, channel) => {
-    // Skip the external-media channel itself
     if (channel.dialplan?.app_data?.includes("externalMedia")) return;
     if (channel.name?.startsWith("UnicastRTP/")) return;
     handleCall(ari, channel).catch((e) => {
