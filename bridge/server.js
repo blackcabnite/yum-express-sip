@@ -127,6 +127,25 @@ async function handleCall(ari, channel) {
   let firstSentLogged = false;
 
   function enqueueOutbound(pcm16Slin) {
+    // ── AUDIO PATH DEBUG (bridge → Asterisk RTP) ──────────────────────
+    // Asterisk externalMedia format=slin16 expects PCM16 LE @ 16kHz,
+    // 20ms per packet → 320 samples → 640 bytes payload, PT=118 (slin16).
+    if (!enqueueOutbound._dbg) enqueueOutbound._dbg = { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
+    const dbg = enqueueOutbound._dbg;
+    dbg.n++;
+    dbg.bytesIn += pcm16Slin.length;
+    const expectedFrames = pcm16Slin.length / FRAME_BYTES;
+    if (dbg.n <= 3 || pcm16Slin.length % FRAME_BYTES !== 0) {
+      console.log(
+        `[tx-audio] enqueue#${dbg.n} bytes=${pcm16Slin.length} ` +
+        `samples=${pcm16Slin.length/2} ms=${(pcm16Slin.length/2/16).toFixed(1)} ` +
+        `→ ${Math.floor(expectedFrames)} full 20ms frames` +
+        (pcm16Slin.length % FRAME_BYTES !== 0
+          ? ` ⚠ remainder=${pcm16Slin.length % FRAME_BYTES}B DROPPED (frame misalignment!)`
+          : ``)
+      );
+    }
+    if (pcm16Slin.length % FRAME_BYTES !== 0) dbg.partial++;
     for (let off = 0; off < pcm16Slin.length; off += FRAME_BYTES) {
       const slice = pcm16Slin.slice(off, off + FRAME_BYTES);
       if (slice.length < FRAME_BYTES) break;
@@ -135,6 +154,7 @@ async function handleCall(ari, channel) {
         droppedFrames++;
       }
       outQueue.push(slice);
+      dbg.framesOut++;
     }
     startPacer();
   }
@@ -156,7 +176,17 @@ async function handleCall(ari, channel) {
         outboundCount++;
         sent++;
         if (!firstSentLogged) {
-          console.log(`[rtp] FIRST paced packet sent to ${remote.address}:${remote.port}`);
+          console.log(
+            `[rtp] FIRST paced packet → ${remote.address}:${remote.port} ` +
+            `pt=${remotePt} payload=${slice.length}B (expect 640 for slin16) ` +
+            `header=12B total=${pkt.length}B ts_inc=${FRAME_SAMPLES}/pkt seq=${(seq-1)&0xffff} ssrc=0x${ssrc.toString(16)}`
+          );
+          if (slice.length !== FRAME_BYTES) {
+            console.warn(`[rtp] ⚠ payload size ${slice.length} != expected ${FRAME_BYTES} — robotic audio likely`);
+          }
+          if (remotePt !== 118) {
+            console.warn(`[rtp] ⚠ negotiated PT=${remotePt}, expected 118 (slin16). Asterisk may misinterpret samples.`);
+          }
           firstSentLogged = true;
         }
         nextSendAt += FRAME_MS;
@@ -179,14 +209,26 @@ async function handleCall(ari, channel) {
   let rxBytes = 0;
   let rxPackets = 0;
   const rxTimer = setInterval(() => {
-    console.log(`[rtp] hb caller→bridge ${rxPackets}p ${rxBytes}b | bridge→caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped`);
+    const dbg = enqueueOutbound._dbg || { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
+    console.log(
+      `[rtp] hb caller→bridge ${rxPackets}p ${rxBytes}b ` +
+      `(avg ${rxPackets ? (rxBytes/rxPackets).toFixed(0) : 0}B/pkt, ${(rxPackets/5).toFixed(1)} pps) | ` +
+      `bridge→caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped | ` +
+      `enqueue: ${dbg.n} chunks ${dbg.bytesIn}B → ${dbg.framesOut} frames` +
+      (dbg.partial ? ` ⚠ ${dbg.partial} misaligned` : ``)
+    );
+    enqueueOutbound._dbg = { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
     rxBytes = 0; rxPackets = 0;
   }, 5000);
   sock.on("message", (pkt, rinfo) => {
     if (!remote || (remote.address === "127.0.0.1" && remote.port !== rinfo.port)) {
       remote = rinfo;
       if (pkt.length >= 2) remotePt = pkt[1] & 0x7f;
-      console.log(`[rtp] inbound remote ${rinfo.address}:${rinfo.port} pt=${remotePt}`);
+      console.log(
+        `[rtp] inbound remote ${rinfo.address}:${rinfo.port} pt=${remotePt} ` +
+        `(118=slin16, 96-127=dynamic). First payload=${(rtpPayload(pkt)||[]).length}B ` +
+        `(expect 640 for slin16@16k/20ms)`
+      );
     }
     const payload = rtpPayload(pkt);
     if (payload && payload.length) {
