@@ -61,6 +61,9 @@ function CallsDashboard() {
       if (error) throw error;
       return (data ?? []) as CallSession[];
     },
+    refetchInterval: 2000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
   });
 
   // Realtime: any change → refetch the list
@@ -76,11 +79,13 @@ function CallsDashboard() {
     };
   }, [qc]);
 
-  // Auto-select latest active call
+  // Auto-select the newest live call as soon as it appears
   useEffect(() => {
-    if (selectedId || !sessionsQ.data?.length) return;
+    if (!sessionsQ.data?.length) return;
     const active = sessionsQ.data.find((s) => s.status === "active") ?? sessionsQ.data[0];
-    if (active) setSelectedId(active.id);
+    if (active && active.id !== selectedId && (active.status === "active" || !selectedId)) {
+      setSelectedId(active.id);
+    }
   }, [sessionsQ.data, selectedId]);
 
   const selected = sessionsQ.data?.find((s) => s.id === selectedId) ?? null;
