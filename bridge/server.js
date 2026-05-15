@@ -19,6 +19,8 @@ const FRAME_MS = 20;
 const FRAME_SAMPLES = 320;          // 16kHz × 20ms = 320 samples
 const FRAME_BYTES = 640;            // 320 samples × 2 bytes/sample (slin16)
 const MAX_QUEUE_FRAMES = 500;       // ~10s — OpenAI delivers in big bursts; need headroom
+const AST_FORMAT = process.env.AST_FORMAT || "slin16";
+const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : null;
 let nextPort = RTP_PORT_BASE;
 
 function pickRtpPort() {
@@ -78,10 +80,10 @@ async function handleCall(ari, channel) {
   console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
 
   let remote = null;
-  // Learn outbound PT from the first inbound packet — Asterisk's dynamic PT
-  // for slin24 isn't fixed across versions; honour what it actually sends.
-  let remotePt = 118;
-  let remotePtLearned = false;
+  // PT selection: if RTP_PT env is set, force it (e.g. 96 for dynamic).
+  // Otherwise learn from the first inbound packet from Asterisk.
+  let remotePt = FORCED_RTP_PT ?? 118;
+  let remotePtLearned = FORCED_RTP_PT != null; // skip learning if forced
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
@@ -91,9 +93,13 @@ async function handleCall(ari, channel) {
     externalChan = await ari.channels.externalMedia({
       app: APP_NAME,
       external_host: `${PUBLIC_HOST}:${localPort}`,
-      format: "slin16",
+      format: AST_FORMAT,
+      encapsulation: "rtp",
+      transport: "udp",
+      connection_type: "client",
+      direction: "both",
     });
-    console.log(`[ari] externalMedia ${externalChan.id} → ${PUBLIC_HOST}:${localPort}`);
+    console.log(`[ari] externalMedia ${externalChan.id} → ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${FORCED_RTP_PT ?? "learn"}`);
   } catch (e) {
     console.error("[call] externalMedia failed", e.message);
     await channel.hangup().catch(() => {});
