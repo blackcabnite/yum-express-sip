@@ -58,6 +58,8 @@ function OrdersPage() {
   });
 
   const mode = codecQ.data?.mode ?? "unknown";
+  const bridgeError = codecQ.data?.error;
+  const bridgeDown = !codecQ.isLoading && (mode === "unknown" || !!bridgeError);
 
   const ordersQ = useQuery({
     queryKey: ["ss_orders"],
@@ -89,19 +91,21 @@ function OrdersPage() {
       <Card className="mb-4">
         <CardHeader className="py-3 border-b flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-sm font-medium">Audio codec (Asterisk)</CardTitle>
-          <span className="text-xs text-muted-foreground">
-            {codecQ.isLoading
-              ? "checking…"
-              : codecQ.error
-                ? "bridge unreachable"
-                : `active: ${mode.toUpperCase()}`}
-          </span>
+          {codecQ.isLoading ? (
+            <span className="text-xs text-muted-foreground">checking…</span>
+          ) : bridgeDown ? (
+            <Badge variant="destructive" title={bridgeError ?? "Bridge unreachable"}>
+              Bridge unreachable
+            </Badge>
+          ) : (
+            <span className="text-xs text-muted-foreground">active: {mode.toUpperCase()}</span>
+          )}
         </CardHeader>
         <CardContent className="p-4 flex items-center gap-2">
           <Button
             size="sm"
             variant={mode === "opus" ? "default" : "outline"}
-            disabled={codecM.isPending || mode === "opus"}
+            disabled={codecM.isPending || bridgeDown || mode === "opus"}
             onClick={() => codecM.mutate("opus")}
           >
             Opus 48 kHz (fullband)
@@ -109,13 +113,18 @@ function OrdersPage() {
           <Button
             size="sm"
             variant={mode === "g722" ? "default" : "outline"}
-            disabled={codecM.isPending || mode === "g722"}
+            disabled={codecM.isPending || bridgeDown || mode === "g722"}
             onClick={() => codecM.mutate("g722")}
           >
             G.722 / default
           </Button>
           {codecM.isPending && (
             <span className="text-xs text-muted-foreground ml-2">reloading Asterisk…</span>
+          )}
+          {bridgeDown && !codecM.isPending && (
+            <span className="text-xs text-muted-foreground ml-2">
+              {bridgeError ?? "Can't reach bridge host"}
+            </span>
           )}
         </CardContent>
       </Card>
