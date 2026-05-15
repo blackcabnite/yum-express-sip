@@ -79,6 +79,7 @@ async function handleCall(ari, channel) {
 
   let remote = null;
   let remotePt = 118;
+  let learnedInboundPt = false;
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
@@ -125,6 +126,7 @@ async function handleCall(ari, channel) {
   let pacerTimer = null;
   let outboundCount = 0;
   let firstSentLogged = false;
+  let partialOutbound = Buffer.alloc(0);
 
   function enqueueOutbound(pcm16Slin) {
     // ── AUDIO PATH DEBUG (bridge → Asterisk RTP) ──────────────────────
@@ -133,22 +135,26 @@ async function handleCall(ari, channel) {
     if (!enqueueOutbound._dbg) enqueueOutbound._dbg = { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
     const dbg = enqueueOutbound._dbg;
     dbg.n++;
+    const combined = partialOutbound.length ? Buffer.concat([partialOutbound, pcm16Slin]) : pcm16Slin;
+    partialOutbound = Buffer.alloc(0);
     dbg.bytesIn += pcm16Slin.length;
-    const expectedFrames = pcm16Slin.length / FRAME_BYTES;
-    if (dbg.n <= 3 || pcm16Slin.length % FRAME_BYTES !== 0) {
+    const expectedFrames = combined.length / FRAME_BYTES;
+    const remainder = combined.length % FRAME_BYTES;
+    if (dbg.n <= 3 || remainder !== 0) {
       console.log(
         `[tx-audio] enqueue#${dbg.n} bytes=${pcm16Slin.length} ` +
         `samples=${pcm16Slin.length/2} ms=${(pcm16Slin.length/2/16).toFixed(1)} ` +
         `→ ${Math.floor(expectedFrames)} full 20ms frames` +
-        (pcm16Slin.length % FRAME_BYTES !== 0
-          ? ` ⚠ remainder=${pcm16Slin.length % FRAME_BYTES}B DROPPED (frame misalignment!)`
+        (remainder !== 0
+          ? ` + carry=${remainder}B`
           : ``)
       );
     }
-    if (pcm16Slin.length % FRAME_BYTES !== 0) dbg.partial++;
-    for (let off = 0; off < pcm16Slin.length; off += FRAME_BYTES) {
-      const slice = pcm16Slin.slice(off, off + FRAME_BYTES);
-      if (slice.length < FRAME_BYTES) break;
+    if (remainder !== 0) dbg.partial++;
+    const usableBytes = combined.length - remainder;
+    if (remainder) partialOutbound = combined.slice(usableBytes);
+    for (let off = 0; off < usableBytes; off += FRAME_BYTES) {
+      const slice = combined.slice(off, off + FRAME_BYTES);
       if (outQueue.length >= MAX_QUEUE_FRAMES) {
         outQueue.shift();
         droppedFrames++;
@@ -221,9 +227,14 @@ async function handleCall(ari, channel) {
     rxBytes = 0; rxPackets = 0;
   }, 5000);
   sock.on("message", (pkt, rinfo) => {
+    const pktPt = pkt.length >= 2 ? pkt[1] & 0x7f : null;
+    if (pktPt !== null && !learnedInboundPt) {
+      learnedInboundPt = true;
+      remotePt = pktPt;
+      console.log(`[rtp] learned inbound PT=${remotePt}; using same PT for bridge→caller audio`);
+    }
     if (!remote || (remote.address === "127.0.0.1" && remote.port !== rinfo.port)) {
       remote = rinfo;
-      if (pkt.length >= 2) remotePt = pkt[1] & 0x7f;
       console.log(
         `[rtp] inbound remote ${rinfo.address}:${rinfo.port} pt=${remotePt} ` +
         `(118=slin16, 96-127=dynamic). First payload=${(rtpPayload(pkt)||[]).length}B ` +
