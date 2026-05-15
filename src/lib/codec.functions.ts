@@ -29,13 +29,34 @@ function normalizeAdminConfig(urlValue: string | undefined, tokenValue: string |
   return { url: url.replace(/\/$/, ""), token };
 }
 
+async function fetchBridge(url: string, init: RequestInit) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function bridgeErrorMessage(error: unknown) {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "Bridge timed out";
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Bridge unavailable";
+}
+
 export const getCodecMode = createServerFn({ method: "GET" }).handler(async () => {
   try {
     const { url, token } = normalizeAdminConfig(
       process.env.BRIDGE_ADMIN_URL,
       process.env.BRIDGE_ADMIN_TOKEN,
     );
-    const res = await fetch(`${url}/admin/codec`, {
+    const res = await fetchBridge(`${url}/admin/codec`, {
       method: "GET",
       headers: { "X-Admin-Token": token },
     });
@@ -48,7 +69,7 @@ export const getCodecMode = createServerFn({ method: "GET" }).handler(async () =
     console.error("Codec bridge status failed", error);
     return {
       mode: "unknown" as const,
-      error: error instanceof Error ? error.message : "bridge unavailable",
+      error: bridgeErrorMessage(error),
     };
   }
 });
@@ -56,22 +77,27 @@ export const getCodecMode = createServerFn({ method: "GET" }).handler(async () =
 export const setCodecMode = createServerFn({ method: "POST" })
   .inputValidator((input) => z.object({ mode: z.enum(["opus", "g722"]) }).parse(input))
   .handler(async ({ data }) => {
-    const { url, token } = normalizeAdminConfig(
-      process.env.BRIDGE_ADMIN_URL,
-      process.env.BRIDGE_ADMIN_TOKEN,
-    );
-    const res = await fetch(`${url}/admin/codec`, {
-      method: "POST",
-      headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: data.mode }),
-    });
-    const json = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      mode?: string;
-      log?: string;
-    };
-    if (!res.ok || !json.ok) {
-      throw new Error(json.log || `bridge ${res.status}`);
+    try {
+      const { url, token } = normalizeAdminConfig(
+        process.env.BRIDGE_ADMIN_URL,
+        process.env.BRIDGE_ADMIN_TOKEN,
+      );
+      const res = await fetchBridge(`${url}/admin/codec`, {
+        method: "POST",
+        headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: data.mode }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        mode?: string;
+        log?: string;
+      };
+      if (!res.ok || !json.ok) {
+        return { ok: false as const, mode: "unknown" as const, error: json.log || `bridge ${res.status}` };
+      }
+      return { ok: true as const, mode: (json.mode as "opus" | "g722" | "unknown") ?? "unknown", log: json.log };
+    } catch (error) {
+      console.error("Codec bridge update failed", error);
+      return { ok: false as const, mode: "unknown" as const, error: bridgeErrorMessage(error) };
     }
-    return { mode: (json.mode as "opus" | "g722" | "unknown") ?? "unknown", log: json.log };
   });
