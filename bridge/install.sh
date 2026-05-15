@@ -14,10 +14,7 @@ fi
 
 echo "==> Copying bridge to $APP_DIR"
 mkdir -p "$APP_DIR"
-cp -r "$REPO_DIR"/{package.json,server.js,admin.js,menu.js,tools.js,supabase.js,whatsapp.js,openai.js} "$APP_DIR/"
-mkdir -p "$APP_DIR/asterisk"
-cp -r "$REPO_DIR"/asterisk/{switch-codec.sh,pjsip.conf,pjsip.opus.conf,codecs.opus.conf,codecs.default.conf} "$APP_DIR/asterisk/" 2>/dev/null || true
-chmod +x "$APP_DIR/asterisk/switch-codec.sh" 2>/dev/null || true
+cp -r "$REPO_DIR"/{package.json,server.js,menu.js,tools.js,supabase.js,whatsapp.js,openai.js} "$APP_DIR/"
 cd "$APP_DIR"
 npm install --omit=dev
 

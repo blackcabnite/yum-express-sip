@@ -1,47 +1,38 @@
 // Sweet Spot voice bridge: Asterisk ARI <-> OpenAI Realtime.
-// Asterisk leg: G.722 @ 16 kHz wideband, RTP PT=9 (static).
-// OpenAI leg:   slin16 LE @ 16 kHz (openai.js resamples 24k<->16k).
-// G.722 RFC 3551 quirk: RTP timestamp clock is 8 kHz even though audio is 16 kHz.
-//
-// Jitter fixes vs prior revision:
-//   - MAX_QUEUE_FRAMES raised 500 → 1500 (~30s headroom for OpenAI bursts)
-//   - Pacer tick 5ms → 2ms; per-tick burst cap 50 → 200
-//   - Pacer uses setImmediate catch-up so G.722 encoding can't starve send loop
+// PATCH: paces outbound RTP at exactly 20ms intervals. OpenAI delivers audio
+// in bursts (10-20 frames at a time); without pacing Asterisk's jitter buffer
+// overflows and most audio gets dropped before reaching Meta.
 import "dotenv/config";
 import ariClient from "ari-client";
 import dgram from "node:dgram";
-import { G722Encoder, G722Decoder } from "g722-spandsp";
 import { createSession, endSession, logEvent } from "./supabase.js";
 import { newCallState } from "./tools.js";
 import { openOpenAIRealtime } from "./openai.js";
 
-const ARI_URL   = process.env.ARI_URL  || "http://127.0.0.1:8088";
-const ARI_USER  = process.env.ARI_USER || "sweetspot";
-const ARI_PASS  = process.env.ARI_PASS;
-const APP_NAME  = "sweetspot";
+const ARI_URL = process.env.ARI_URL || "http://127.0.0.1:8088";
+const ARI_USER = process.env.ARI_USER || "sweetspot";
+const ARI_PASS = process.env.ARI_PASS;
+const APP_NAME = "sweetspot";
 const PUBLIC_HOST = process.env.PUBLIC_HOST || "127.0.0.1";
 const RTP_PORT_BASE = 14000;
-
-const FRAME_MS           = 20;
-const FRAME_BYTES_SLIN16 = 640;   // 320 samples * 2 bytes @ 16 kHz / 20 ms
-const FRAME_BYTES_G722   = 160;   // 64 kbps * 20 ms / 8 = 160 B
-const TS_INC_PER_FRAME   = 160;   // RFC 3551: G.722 uses 8 kHz RTP clock
-const MAX_QUEUE_FRAMES   = 1500;  // ~30s headroom — OpenAI bursts hard
-
-const AST_FORMAT    = process.env.AST_FORMAT || "g722";
-const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : 9;
-
+const FRAME_MS = 20;
+const FRAME_SAMPLES = 320;          // 16kHz × 20ms = 320 samples
+const FRAME_BYTES = 640;            // 320 samples × 2 bytes/sample (slin16)
+const MAX_QUEUE_FRAMES = 500;       // ~10s — OpenAI delivers in big bursts; need headroom
+const AST_FORMAT = process.env.AST_FORMAT || "slin16";
+const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : null;
 let nextPort = RTP_PORT_BASE;
+
 function pickRtpPort() {
   const p = nextPort;
-  nextPort += 2;
+  nextPort = nextPort + 2;
   if (nextPort > RTP_PORT_BASE + 200) nextPort = RTP_PORT_BASE;
   return p;
 }
 
 function rtpPayload(pkt) {
   if (pkt.length < 12) return null;
-  const cc  = pkt[0] & 0x0f;
+  const cc = pkt[0] & 0x0f;
   const ext = (pkt[0] & 0x10) !== 0;
   let off = 12 + cc * 4;
   if (ext && pkt.length >= off + 4) {
@@ -51,7 +42,7 @@ function rtpPayload(pkt) {
   return pkt.slice(off);
 }
 
-function buildRtpPacket({ seq, ts, ssrc, payload, pt }) {
+function buildRtpPacket({ seq, ts, ssrc, payload, pt = 96 }) {
   const hdr = Buffer.alloc(12);
   hdr[0] = 0x80;
   hdr[1] = pt & 0x7f;
@@ -74,15 +65,11 @@ async function getChannelVar(ari, channelId, variable, retries = 8) {
 
 async function handleCall(ari, channel) {
   const callerMsisdn = channel.caller?.number || null;
-  console.log(`[call] start ch=${channel.id} caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT}`);
+  console.log(`[call] start ch=${channel.id} caller=${callerMsisdn}`);
 
   const session = await createSession({ callerMsisdn, channelId: channel.id });
-  const state   = newCallState({ sessionId: session.id, callerMsisdn });
+  const state = newCallState({ sessionId: session.id, callerMsisdn });
   await logEvent(session.id, "call_start", null, { channel_id: channel.id, caller: callerMsisdn });
-
-  // Per-call G.722 codecs (stateful ADPCM — must be fresh per call)
-  const g722Enc = new G722Encoder();
-  const g722Dec = new G722Decoder();
 
   const localPort = pickRtpPort();
   const sock = dgram.createSocket("udp4");
@@ -92,10 +79,13 @@ async function handleCall(ari, channel) {
   });
   console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
 
-  let remote     = null;
-  const remotePt = FORCED_RTP_PT;
-  let seq  = Math.floor(Math.random() * 65535);
-  let ts   = 0;
+  let remote = null;
+  // PT selection: if RTP_PT env is set, force it (e.g. 96 for dynamic).
+  // Otherwise learn from the first inbound packet from Asterisk.
+  let remotePt = FORCED_RTP_PT ?? 118;
+  let remotePtLearned = FORCED_RTP_PT != null; // skip learning if forced
+  let seq = Math.floor(Math.random() * 65535);
+  let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
 
   let externalChan;
@@ -109,7 +99,7 @@ async function handleCall(ari, channel) {
       connection_type: "client",
       direction: "both",
     });
-    console.log(`[ari] externalMedia ${externalChan.id} -> ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${remotePt}`);
+    console.log(`[ari] externalMedia ${externalChan.id} → ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${FORCED_RTP_PT ?? "learn"}`);
   } catch (e) {
     console.error("[call] externalMedia failed", e.message);
     await channel.hangup().catch(() => {});
@@ -117,6 +107,7 @@ async function handleCall(ari, channel) {
     return;
   }
 
+  // Seed remote destination so we can send audio before any caller-side RTP arrives.
   try {
     const remoteAddr = (await getChannelVar(ari, externalChan.id, "UNICASTRTP_LOCAL_ADDRESS")) || "127.0.0.1";
     const remotePort = await getChannelVar(ari, externalChan.id, "UNICASTRTP_LOCAL_PORT");
@@ -132,45 +123,54 @@ async function handleCall(ari, channel) {
   await bridge.create({ type: "mixing" });
   await bridge.addChannel({ channel: [channel.id, externalChan.id] });
 
-  // ---------- outbound: AI(slin16 16k) -> G.722 -> RTP ------------
+  // ─── PACED OUTBOUND RTP ─────────────────────────────────────────────────
+  // Buffer 640-byte slin16 frames; emit one every 20ms via a self-correcting
+  // timer. OpenAI delivers audio in bursts; Asterisk's jitter buffer drops
+  // packets that arrive faster than playout rate. Without this fix, most of
+  // the model's audio never reaches the caller — they hear comfort noise.
   const outQueue = [];
-  let droppedFrames  = 0;
-  let nextSendAt     = null;
-  let pacerTimer     = null;
-  let outboundCount  = 0;
+  let droppedFrames = 0;
+  let nextSendAt = null;
+  let pacerTimer = null;
+  let outboundCount = 0;
   let firstSentLogged = false;
   let partialOutbound = Buffer.alloc(0);
 
-  function enqueueOutbound(pcm16Slin16k) {
-    const combined  = partialOutbound.length ? Buffer.concat([partialOutbound, pcm16Slin16k]) : pcm16Slin16k;
-    const remainder = combined.length % FRAME_BYTES_SLIN16;
-    const usable    = combined.length - remainder;
-    partialOutbound = remainder ? combined.slice(usable) : Buffer.alloc(0);
-
-    for (let off = 0; off < usable; off += FRAME_BYTES_SLIN16) {
-      const slin16Frame = combined.slice(off, off + FRAME_BYTES_SLIN16);
-      const g722Frame   = g722Enc.encode(slin16Frame);
-      if (outQueue.length >= MAX_QUEUE_FRAMES) { outQueue.shift(); droppedFrames++; }
-      outQueue.push(g722Frame);
+  function enqueueOutbound(pcm16Slin) {
+    // ── AUDIO PATH DEBUG (bridge → Asterisk RTP) ──────────────────────
+    // Asterisk externalMedia format=slin16 expects PCM16 LE @ 16kHz,
+    // 20ms per packet → 320 samples → 640 bytes payload, PT=118 (slin16).
+    if (!enqueueOutbound._dbg) enqueueOutbound._dbg = { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
+    const dbg = enqueueOutbound._dbg;
+    dbg.n++;
+    const combined = partialOutbound.length ? Buffer.concat([partialOutbound, pcm16Slin]) : pcm16Slin;
+    partialOutbound = Buffer.alloc(0);
+    dbg.bytesIn += pcm16Slin.length;
+    const expectedFrames = combined.length / FRAME_BYTES;
+    const remainder = combined.length % FRAME_BYTES;
+    if (dbg.n <= 3 || remainder !== 0) {
+      console.log(
+        `[tx-audio] enqueue#${dbg.n} bytes=${pcm16Slin.length} ` +
+        `samples=${pcm16Slin.length/2} ms=${(pcm16Slin.length/2/16).toFixed(1)} ` +
+        `→ ${Math.floor(expectedFrames)} full 20ms frames` +
+        (remainder !== 0
+          ? ` + carry=${remainder}B`
+          : ``)
+      );
+    }
+    if (remainder !== 0) dbg.partial++;
+    const usableBytes = combined.length - remainder;
+    if (remainder) partialOutbound = combined.slice(usableBytes);
+    for (let off = 0; off < usableBytes; off += FRAME_BYTES) {
+      const slice = combined.slice(off, off + FRAME_BYTES);
+      if (outQueue.length >= MAX_QUEUE_FRAMES) {
+        outQueue.shift();
+        droppedFrames++;
+      }
+      outQueue.push(slice);
+      dbg.framesOut++;
     }
     startPacer();
-  }
-
-  function sendOne(slice) {
-    const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
-    ts = (ts + TS_INC_PER_FRAME) >>> 0;
-    sock.send(pkt, remote.port, remote.address, (e) => {
-      if (e) console.error("[rtp] send err", e.message);
-    });
-    outboundCount++;
-    if (!firstSentLogged) {
-      console.log(
-        `[rtp] FIRST paced packet -> ${remote.address}:${remote.port} ` +
-        `pt=${remotePt} payload=${slice.length}B header=12B total=${pkt.length}B ` +
-        `ts_inc=${TS_INC_PER_FRAME}/pkt seq=${(seq - 1) & 0xffff} ssrc=0x${ssrc.toString(16)}`
-      );
-      firstSentLogged = true;
-    }
   }
 
   function startPacer() {
@@ -179,50 +179,80 @@ async function handleCall(ari, channel) {
     pacerTimer = setInterval(() => {
       if (!remote) return;
       const now = Date.now();
-      // Resync if we drifted way behind (e.g. event loop hiccup) — don't try
-      // to flush thousands of packets in one tick.
+      // If pacer fell way behind during silence, resync to "now" so we don't
+      // try to flush 1000 packets in one tick when audio resumes.
       if (now - nextSendAt > 200) nextSendAt = now;
       let sent = 0;
-      while (outQueue.length > 0 && now >= nextSendAt && sent < 200) {
-        sendOne(outQueue.shift());
+      while (outQueue.length > 0 && now >= nextSendAt && sent < 50) {
+        const slice = outQueue.shift();
+        const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
+        ts = (ts + FRAME_SAMPLES) >>> 0;
+        sock.send(pkt, remote.port, remote.address, (e) => {
+          if (e) console.error("[rtp] send err", e.message);
+        });
+        outboundCount++;
         sent++;
+        if (!firstSentLogged) {
+          console.log(
+            `[rtp] FIRST paced packet → ${remote.address}:${remote.port} ` +
+            `pt=${remotePt} payload=${slice.length}B (expect 640 for slin16) ` +
+            `header=12B total=${pkt.length}B ts_inc=${FRAME_SAMPLES}/pkt seq=${(seq-1)&0xffff} ssrc=0x${ssrc.toString(16)}`
+          );
+          if (slice.length !== FRAME_BYTES) {
+            console.warn(`[rtp] ⚠ payload size ${slice.length} != expected ${FRAME_BYTES} — robotic audio likely`);
+          }
+          if (remotePt !== 118) {
+            console.warn(`[rtp] ⚠ negotiated PT=${remotePt}, expected 118 (slin16). Asterisk may misinterpret samples.`);
+          }
+          firstSentLogged = true;
+        }
         nextSendAt += FRAME_MS;
       }
-    }, 2);
+    }, 5);
   }
 
   const oa = openOpenAIRealtime({
     state,
-    onAudioToCaller(pcm16Slin16k) {
+    onAudioToCaller(pcm16Slin) {
       if (!remote) return;
-      enqueueOutbound(pcm16Slin16k);
+      enqueueOutbound(pcm16Slin);
     },
     onClose() {},
   });
 
-  // ---------- inbound: RTP G.722 -> slin16 16k -> OpenAI ----------
   let rxBytes = 0;
   let rxPackets = 0;
   const rxTimer = setInterval(() => {
+    const dbg = enqueueOutbound._dbg || { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
     console.log(
-      `[rtp] hb caller->bridge ${rxPackets}p ${rxBytes}b ` +
-      `(avg ${rxPackets ? (rxBytes / rxPackets).toFixed(0) : 0}B/pkt, ${(rxPackets / 5).toFixed(1)} pps) | ` +
-      `bridge->caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped · pt=${remotePt}`
+      `[rtp] hb caller→bridge ${rxPackets}p ${rxBytes}b ` +
+      `(avg ${rxPackets ? (rxBytes/rxPackets).toFixed(0) : 0}B/pkt, ${(rxPackets/5).toFixed(1)} pps) | ` +
+      `bridge→caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped | ` +
+      `enqueue: ${dbg.n} chunks ${dbg.bytesIn}B → ${dbg.framesOut} frames` +
+      (dbg.partial ? ` ⚠ ${dbg.partial} misaligned` : ``)
     );
+    enqueueOutbound._dbg = { n: 0, bytesIn: 0, framesOut: 0, partial: 0 };
     rxBytes = 0; rxPackets = 0;
   }, 5000);
-
   sock.on("message", (pkt, rinfo) => {
+    if (!remotePtLearned && pkt.length >= 2) {
+      remotePt = pkt[1] & 0x7f;
+      remotePtLearned = true;
+      console.log(`[rtp] learned outbound_pt=${remotePt} from first inbound packet`);
+    }
+    // Do NOT overwrite `remote` from rinfo — Asterisk's externalMedia tells us
+    // the exact destination via UNICASTRTP_LOCAL_ADDRESS/PORT. Inbound packets
+    // may originate from a different ephemeral port and would mis-route TX audio.
     if (!remote) {
       remote = rinfo;
-      console.log(`[rtp] no seeded remote; using inbound source ${rinfo.address}:${rinfo.port}`);
+      console.log(`[rtp] no seeded remote; falling back to inbound source ${rinfo.address}:${rinfo.port}`);
     }
     const payload = rtpPayload(pkt);
-    if (!payload || !payload.length) return;
-    rxBytes += payload.length;
-    rxPackets++;
-    const slin16Buf = g722Dec.decode(payload);
-    oa.pushCallerAudio(slin16Buf);
+    if (payload && payload.length) {
+      rxBytes += payload.length;
+      rxPackets++;
+      oa.pushCallerAudio(payload);
+    }
   });
 
   let cleaned = false;
@@ -238,9 +268,8 @@ async function handleCall(ari, channel) {
     try { await externalChan.hangup(); } catch {}
     try { await logEvent(state.sessionId, "call_end", why); } catch {}
     try { await endSession(state.sessionId); } catch {}
-    try { g722Enc.reset?.(); g722Dec.reset?.(); } catch {}
   };
-  channel.once("StasisEnd",      () => cleanup("caller_hangup"));
+  channel.once("StasisEnd", () => cleanup("caller_hangup"));
   externalChan.once("StasisEnd", () => cleanup("media_end"));
 }
 
@@ -250,6 +279,7 @@ async function main() {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set");
   }
+
   const ari = await ariClient.connect(ARI_URL, ARI_USER, ARI_PASS);
   ari.on("StasisStart", (event, channel) => {
     if (channel.dialplan?.app_data?.includes("externalMedia")) return;
