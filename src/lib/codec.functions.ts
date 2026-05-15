@@ -31,7 +31,10 @@ function normalizeAdminConfig(urlValue: string | undefined, tokenValue: string |
 
 export const getCodecMode = createServerFn({ method: "GET" }).handler(async () => {
   try {
-    const { url, token } = normalizeAdminConfig(process.env.BRIDGE_ADMIN_URL, process.env.BRIDGE_ADMIN_TOKEN);
+    const { url, token } = normalizeAdminConfig(
+      process.env.BRIDGE_ADMIN_URL,
+      process.env.BRIDGE_ADMIN_TOKEN,
+    );
     const res = await fetch(`${url}/admin/codec`, {
       method: "GET",
       headers: { "X-Admin-Token": token },
@@ -43,20 +46,30 @@ export const getCodecMode = createServerFn({ method: "GET" }).handler(async () =
     return { mode: (data.mode as "opus" | "g722" | "unknown") ?? "unknown", details: data.details };
   } catch (error) {
     console.error("Codec bridge status failed", error);
-    return { mode: "unknown" as const, error: error instanceof Error ? error.message : "bridge unavailable" };
+    return {
+      mode: "unknown" as const,
+      error: error instanceof Error ? error.message : "bridge unavailable",
+    };
   }
 });
 
 export const setCodecMode = createServerFn({ method: "POST" })
   .inputValidator((input) => z.object({ mode: z.enum(["opus", "g722"]) }).parse(input))
   .handler(async ({ data }) => {
-    const { url, token } = normalizeAdminConfig(process.env.BRIDGE_ADMIN_URL, process.env.BRIDGE_ADMIN_TOKEN);
+    const { url, token } = normalizeAdminConfig(
+      process.env.BRIDGE_ADMIN_URL,
+      process.env.BRIDGE_ADMIN_TOKEN,
+    );
     const res = await fetch(`${url}/admin/codec`, {
       method: "POST",
       headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
       body: JSON.stringify({ mode: data.mode }),
     });
-    const json = (await res.json().catch(() => ({}))) as { ok?: boolean; mode?: string; log?: string };
+    const json = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      mode?: string;
+      log?: string;
+    };
     if (!res.ok || !json.ok) {
       throw new Error(json.log || `bridge ${res.status}`);
     }
