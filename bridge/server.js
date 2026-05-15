@@ -106,18 +106,29 @@ async function handleCall(ari, channel) {
   });
 
   // 5) Caller audio in → OpenAI.
+  let rxBytes = 0;
+  let rxPackets = 0;
+  const rxTimer = setInterval(() => {
+    if (rxPackets) console.log(`[rtp] caller→bridge ${rxPackets} pkts / ${rxBytes} bytes (last 5s)`);
+    rxBytes = 0; rxPackets = 0;
+  }, 5000);
   sock.on("message", (pkt, rinfo) => {
     if (!remote) {
       remote = rinfo;
       console.log(`[rtp] remote ${rinfo.address}:${rinfo.port}`);
     }
     const payload = rtpPayload(pkt);
-    if (payload && payload.length) oa.pushCallerAudio(payload);
+    if (payload && payload.length) {
+      rxBytes += payload.length;
+      rxPackets++;
+      oa.pushCallerAudio(payload);
+    }
   });
 
   // 6) Cleanup on hangup.
   const cleanup = async (why) => {
     console.log(`[call] end ch=${channel.id} (${why})`);
+    clearInterval(rxTimer);
     try { oa.close(); } catch {}
     try { sock.close(); } catch {}
     try { await bridge.destroy(); } catch {}
