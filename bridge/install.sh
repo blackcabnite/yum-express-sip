@@ -27,7 +27,7 @@ if [[ ! -f "$ENV_DIR/.env" ]]; then
 fi
 
 echo "==> Installing Asterisk configs (backups created)"
-for f in ari.conf http.conf extensions.conf pjsip.conf; do
+for f in ari.conf http.conf extensions.conf pjsip.conf codecs.conf; do
   if [[ -f "/etc/asterisk/$f" ]]; then
     cp "/etc/asterisk/$f" "/etc/asterisk/$f.bak.$(date +%s)"
   fi
