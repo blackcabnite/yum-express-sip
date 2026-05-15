@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 
 export const Route = createFileRoute("/_authenticated/orders")({
   component: OrdersPage,
+  ssr: false,
 });
 
 type Order = {
