@@ -19,14 +19,14 @@ function normalizeAdminConfig(urlValue: string | undefined, tokenValue: string |
     [url, token] = [token, url];
   }
 
-  if (!url || !token) {
-    throw new Error("BRIDGE_ADMIN_URL or BRIDGE_ADMIN_TOKEN not configured");
+  if (!url) {
+    throw new Error("BRIDGE_ADMIN_URL not configured");
   }
   if (!isValidHttpUrl(url)) {
     throw new Error("BRIDGE_ADMIN_URL must be a full http(s) URL");
   }
 
-  return { url: url.replace(/\/$/, ""), token };
+  return { url: url.replace(/\/$/, ""), token: token || "" };
 }
 
 async function fetchBridge(url: string, init: RequestInit) {
@@ -58,7 +58,7 @@ export const getCodecMode = createServerFn({ method: "GET" }).handler(async () =
     );
     const res = await fetchBridge(`${url}/admin/codec`, {
       method: "GET",
-      headers: { "X-Admin-Token": token },
+      headers: token ? { "X-Admin-Token": token } : {},
     });
     if (!res.ok) {
       return { mode: "unknown" as const, error: `bridge ${res.status}` };
@@ -84,7 +84,9 @@ export const setCodecMode = createServerFn({ method: "POST" })
       );
       const res = await fetchBridge(`${url}/admin/codec`, {
         method: "POST",
-        headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
+        headers: token
+          ? { "X-Admin-Token": token, "Content-Type": "application/json" }
+          : { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: data.mode }),
       });
       const json = (await res.json().catch(() => ({}))) as {
