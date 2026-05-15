@@ -16,8 +16,8 @@ const APP_NAME = "sweetspot";
 const PUBLIC_HOST = process.env.PUBLIC_HOST || "127.0.0.1";
 const RTP_PORT_BASE = 14000;
 const FRAME_MS = 20;
-const FRAME_SAMPLES = 480;          // 24kHz × 20ms = 480 samples
-const FRAME_BYTES = 960;            // 480 samples × 2 bytes/sample (slin24)
+const FRAME_SAMPLES = 320;          // 16kHz × 20ms = 320 samples
+const FRAME_BYTES = 640;            // 320 samples × 2 bytes/sample (slin16)
 const MAX_QUEUE_FRAMES = 500;       // ~10s — OpenAI delivers in big bursts; need headroom
 let nextPort = RTP_PORT_BASE;
 
@@ -91,7 +91,7 @@ async function handleCall(ari, channel) {
     externalChan = await ari.channels.externalMedia({
       app: APP_NAME,
       external_host: `${PUBLIC_HOST}:${localPort}`,
-      format: "slin24",
+      format: "slin16",
     });
     console.log(`[ari] externalMedia ${externalChan.id} → ${PUBLIC_HOST}:${localPort}`);
   } catch (e) {

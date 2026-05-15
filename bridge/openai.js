@@ -84,28 +84,27 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
     switch (msg.type) {
       case "response.audio.delta": {
         const pcm24 = Buffer.from(msg.delta, "base64");
-        // ── AUDIO PATH DEBUG (model → bridge) ─────────────────────────
-        // OpenAI Realtime emits PCM16 LE @ 24kHz. Asterisk externalMedia is
-        // configured for slin24, so we forward verbatim — no resampling.
+        // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
+        // slin24 translation paths, so resample down to 16 kHz (slin16).
+        const pcm16 = resamplePCM16(pcm24, 24000, 16000);
         if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
         const d = openOpenAIRealtime._audDbg;
-        d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm24.length;
+        d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
         if (d.n <= 3) {
-          const inSamples = pcm24.length / 2;
           console.log(
-            `[ai-audio] delta#${d.n} PCM16@24k bytes=${pcm24.length} samples=${inSamples} ms=${(inSamples/24).toFixed(1)} ` +
-            `frames20ms=${(pcm24.length/960).toFixed(2)} (passthrough, no resample)`
+            `[ai-audio] delta#${d.n} 24k=${pcm24.length}B → 16k=${pcm16.length}B ` +
+            `frames20ms=${(pcm16.length/640).toFixed(2)}`
           );
         }
         const dt = Date.now() - d.t0;
         if (dt >= 5000) {
           console.log(
-            `[ai-audio] 5s summary deltas=${d.n} ${d.bytesIn}B@24k passthrough ` +
-            `(${(d.bytesIn/2/24/1000).toFixed(2)}s audio) rate=${(d.n/(dt/1000)).toFixed(1)} deltas/s`
+            `[ai-audio] 5s deltas=${d.n} in=${d.bytesIn}B@24k out=${d.bytesOut}B@16k ` +
+            `(${(d.bytesOut/2/16/1000).toFixed(2)}s audio) rate=${(d.n/(dt/1000)).toFixed(1)}/s`
           );
           d.n = 0; d.bytesIn = 0; d.bytesOut = 0; d.t0 = Date.now();
         }
-        onAudioToCaller(pcm24);
+        onAudioToCaller(pcm16);
         break;
       }
       case "response.audio_transcript.done": {
@@ -152,8 +151,9 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
   return {
     pushCallerAudio(pcm16Slin) {
       if (ws.readyState !== WebSocket.OPEN) return;
-      // Asterisk now sends us slin24 (PCM16 LE @ 24kHz) directly — forward verbatim.
-      ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm16Slin.toString("base64") }));
+      // Asterisk sends slin16 (PCM16 LE @ 16kHz). Resample up to 24kHz for OpenAI Realtime.
+      const pcm24 = resamplePCM16(pcm16Slin, 16000, 24000);
+      ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm24.toString("base64") }));
     },
     close() { try { ws.close(); } catch {} },
   };
