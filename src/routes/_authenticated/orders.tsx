@@ -47,6 +47,10 @@ function OrdersPage() {
   const codecM = useMutation({
     mutationFn: (mode: "opus" | "g722") => writeCodec({ data: { mode } }),
     onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(`Switch failed: ${res.error}`);
+        return;
+      }
       toast.success(`Codec switched to ${res.mode.toUpperCase()}`);
       qc.invalidateQueries({ queryKey: ["codec_mode"] });
     },
