@@ -65,7 +65,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
         instructions: systemPrompt(),
-        turn_detection: { type: "server_vad", threshold: 0.55, prefix_padding_ms: 200, silence_duration_ms: 600 },
+        turn_detection: { type: "server_vad", threshold: 0.3, prefix_padding_ms: 300, silence_duration_ms: 700 },
         input_audio_transcription: { model: "whisper-1" },
         tools: TOOL_SCHEMAS,
         tool_choice: "auto",
