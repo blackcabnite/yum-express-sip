@@ -5,7 +5,7 @@ import { TOOL_SCHEMAS, execTool } from "./tools.js";
 import { menuForPrompt } from "./menu.js";
 import { logEvent, updateSession } from "./supabase.js";
 
-const REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime";
+const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17"}`;
 const VOICE = process.env.VOICE || "coral";
 
 function systemPrompt() {
