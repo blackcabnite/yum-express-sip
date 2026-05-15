@@ -1,10 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { getCodecMode, setCodecMode } from "@/lib/codec.functions";
 
 export const Route = createFileRoute("/_authenticated/orders")({
   component: OrdersPage,
@@ -30,6 +34,26 @@ function fmtPence(p: number) {
 
 function OrdersPage() {
   const qc = useQueryClient();
+  const fetchCodec = useServerFn(getCodecMode);
+  const writeCodec = useServerFn(setCodecMode);
+
+  const codecQ = useQuery({
+    queryKey: ["codec_mode"],
+    queryFn: () => fetchCodec(),
+    refetchInterval: 30000,
+    retry: false,
+  });
+
+  const codecM = useMutation({
+    mutationFn: (mode: "opus" | "g722") => writeCodec({ data: { mode } }),
+    onSuccess: (res) => {
+      toast.success(`Codec switched to ${res.mode.toUpperCase()}`);
+      qc.invalidateQueries({ queryKey: ["codec_mode"] });
+    },
+    onError: (e: Error) => toast.error(`Switch failed: ${e.message}`),
+  });
+
+  const mode = codecQ.data?.mode ?? "unknown";
 
   const ordersQ = useQuery({
     queryKey: ["ss_orders"],
@@ -58,6 +82,34 @@ function OrdersPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
+      <Card className="mb-4">
+        <CardHeader className="py-3 border-b flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-sm font-medium">Audio codec (Asterisk)</CardTitle>
+          <span className="text-xs text-muted-foreground">
+            {codecQ.isLoading ? "checking…" : codecQ.error ? "bridge unreachable" : `active: ${mode.toUpperCase()}`}
+          </span>
+        </CardHeader>
+        <CardContent className="p-4 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={mode === "opus" ? "default" : "outline"}
+            disabled={codecM.isPending || mode === "opus"}
+            onClick={() => codecM.mutate("opus")}
+          >
+            Opus 48 kHz (fullband)
+          </Button>
+          <Button
+            size="sm"
+            variant={mode === "g722" ? "default" : "outline"}
+            disabled={codecM.isPending || mode === "g722"}
+            onClick={() => codecM.mutate("g722")}
+          >
+            G.722 / default
+          </Button>
+          {codecM.isPending && <span className="text-xs text-muted-foreground ml-2">reloading Asterisk…</span>}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="py-3 border-b">
           <CardTitle className="text-sm font-medium">Orders</CardTitle>
