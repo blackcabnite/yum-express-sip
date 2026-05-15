@@ -8,6 +8,7 @@ import dgram from "node:dgram";
 import { createSession, endSession, logEvent } from "./supabase.js";
 import { newCallState } from "./tools.js";
 import { openOpenAIRealtime } from "./openai.js";
+import { startAdminServer } from "./admin.js";
 
 const ARI_URL = process.env.ARI_URL || "http://127.0.0.1:8088";
 const ARI_USER = process.env.ARI_USER || "sweetspot";
@@ -291,6 +292,7 @@ async function main() {
   });
   await ari.start(APP_NAME);
   console.log(`[bridge] listening as ARI app "${APP_NAME}"`);
+  startAdminServer();
 }
 
 main().catch((e) => { console.error("[bridge] fatal", e); process.exit(1); });
