@@ -63,6 +63,7 @@ async function handleCall(ari, channel) {
   });
 
   let remote = null;
+  let remotePt = 118; // Asterisk's slin16 dynamic PT — learned from first inbound packet
   let seq = Math.floor(Math.random() * 65535);
   let ts = 0;
   const ssrc = Math.floor(Math.random() * 0xffffffff);
@@ -97,7 +98,7 @@ async function handleCall(ari, channel) {
       for (let off = 0; off < pcm16Slin.length; off += FRAME) {
         const slice = pcm16Slin.slice(off, off + FRAME);
         if (slice.length < FRAME) break;
-        const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice });
+        const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
         ts = (ts + 320) >>> 0;
         sock.send(pkt, remote.port, remote.address, (e) => { if (e) console.error("[rtp] send", e.message); });
       }
@@ -115,7 +116,8 @@ async function handleCall(ari, channel) {
   sock.on("message", (pkt, rinfo) => {
     if (!remote) {
       remote = rinfo;
-      console.log(`[rtp] remote ${rinfo.address}:${rinfo.port}`);
+      if (pkt.length >= 2) remotePt = pkt[1] & 0x7f;
+      console.log(`[rtp] remote ${rinfo.address}:${rinfo.port} pt=${remotePt}`);
     }
     const payload = rtpPayload(pkt);
     if (payload && payload.length) {
