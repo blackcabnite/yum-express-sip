@@ -18,7 +18,7 @@ const RTP_PORT_BASE = 14000;
 const FRAME_MS = 20;
 const FRAME_SAMPLES = 320;          // 16kHz × 20ms = 320 samples
 const FRAME_BYTES = 640;            // 320 samples × 2 bytes/sample
-const MAX_QUEUE_FRAMES = 50;        // ~1s — beyond this, drop oldest to keep latency bounded
+const MAX_QUEUE_FRAMES = 500;       // ~10s — OpenAI delivers in big bursts; need headroom
 let nextPort = RTP_PORT_BASE;
 
 function pickRtpPort() {
@@ -171,8 +171,11 @@ async function handleCall(ari, channel) {
     pacerTimer = setInterval(() => {
       if (!remote) return;
       const now = Date.now();
+      // If pacer fell way behind during silence, resync to "now" so we don't
+      // try to flush 1000 packets in one tick when audio resumes.
+      if (now - nextSendAt > 200) nextSendAt = now;
       let sent = 0;
-      while (outQueue.length > 0 && now >= nextSendAt && sent < 5) {
+      while (outQueue.length > 0 && now >= nextSendAt && sent < 50) {
         const slice = outQueue.shift();
         const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
         ts = (ts + FRAME_SAMPLES) >>> 0;
@@ -196,9 +199,6 @@ async function handleCall(ari, channel) {
           firstSentLogged = true;
         }
         nextSendAt += FRAME_MS;
-      }
-      if (outQueue.length === 0) {
-        nextSendAt = Date.now();
       }
     }, 5);
   }
