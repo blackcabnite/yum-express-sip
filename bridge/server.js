@@ -21,7 +21,7 @@ const FRAME_MS           = 20;
 const FRAME_BYTES_SLIN16 = 640;   // 320 samples * 2 bytes @ 16 kHz / 20 ms
 const FRAME_BYTES_G722   = 160;   // 64 kbps * 20 ms / 8 = 160 B
 const TS_INC_PER_FRAME   = 160;   // RFC 3551: G.722 uses 8 kHz RTP clock
-const MAX_QUEUE_FRAMES   = 75;     // 1.5s @ 50fps — keep latency low for phone agent
+const MAX_QUEUE_FRAMES   = 200;    // 4s @ 50fps — bounded latency, won't clip mid-sentence on OpenAI bursts
 
 const AST_FORMAT    = process.env.AST_FORMAT || "g722";
 const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : 9;
