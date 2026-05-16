@@ -21,7 +21,7 @@ const FRAME_MS           = 20;
 const FRAME_BYTES_SLIN16 = 640;   // 320 samples * 2 bytes @ 16 kHz / 20 ms
 const FRAME_BYTES_G722   = 160;   // 64 kbps * 20 ms / 8 = 160 B
 const TS_INC_PER_FRAME   = 160;   // RFC 3551: G.722 uses 8 kHz RTP clock
-const MAX_QUEUE_FRAMES   = 3000;   // 60s @ 50fps — absorb full AI utterances
+const MAX_QUEUE_FRAMES   = 75;     // 1.5s @ 50fps — keep latency low for phone agent
 
 const AST_FORMAT    = process.env.AST_FORMAT || "g722";
 const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : 9;
@@ -175,8 +175,9 @@ async function handleCall(ari, channel) {
       if (!remote) return;
       const now = Date.now();
       if (now - nextSendAt > 200) nextSendAt = now;
-      let sent = 0;
-      while (outQueue.length > 0 && now >= nextSendAt && sent < 50) {
+      // One packet per tick — never burst. 5ms tick still drains 20ms frames
+      // fast enough; queue grows during AI bursts, drains 1 pkt / 5 ms until caught up.
+      if (outQueue.length > 0 && now >= nextSendAt) {
         const slice = outQueue.shift();
         const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
         ts = (ts + TS_INC_PER_FRAME) >>> 0;
@@ -184,7 +185,6 @@ async function handleCall(ari, channel) {
           if (e) console.error(`${tag} [rtp] send err`, e.message);
         });
         outboundCount++;
-        sent++;
         if (!firstSentLogged) {
           console.log(
             `${tag} [rtp] FIRST paced packet -> ${remote.address}:${remote.port} ` +
