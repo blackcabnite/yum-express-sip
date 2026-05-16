@@ -174,9 +174,12 @@ async function handleCall(ari, channel) {
     pacerTimer = setInterval(() => {
       if (!remote) return;
       const now = Date.now();
-      if (now - nextSendAt > 200) nextSendAt = now;
-      // One packet per tick — never burst. 5ms tick still drains 20ms frames
-      // fast enough; queue grows during AI bursts, drains 1 pkt / 5 ms until caught up.
+      // Strict pacing: never burst-catch-up. Any drift >= one frame resets the
+      // clock to `now` so we always send exactly one 20ms frame per 20ms of
+      // wall time. Previously the 200ms threshold allowed 20-200ms of drift to
+      // drain as back-to-back packets on each 5ms tick — that played audio at
+      // up to 4x speed for short bursts ("sometimes speeding up").
+      if (now - nextSendAt > FRAME_MS) nextSendAt = now;
       if (outQueue.length > 0 && now >= nextSendAt) {
         const slice = outQueue.shift();
         const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
