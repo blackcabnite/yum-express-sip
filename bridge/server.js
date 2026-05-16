@@ -21,28 +21,18 @@ const FRAME_MS           = 20;
 const FRAME_BYTES_SLIN16 = 640;   // 320 samples * 2 bytes @ 16 kHz / 20 ms
 const FRAME_BYTES_G722   = 160;   // 64 kbps * 20 ms / 8 = 160 B
 const TS_INC_PER_FRAME   = 160;   // RFC 3551: G.722 uses 8 kHz RTP clock
-const MAX_QUEUE_FRAMES   = 200;    // 4s @ 50fps — bounded latency, won't clip mid-sentence on OpenAI bursts
+const MAX_QUEUE_FRAMES   = 3000;   // 60s @ 50fps — absorb full AI utterances
 
 const AST_FORMAT    = process.env.AST_FORMAT || "g722";
 const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : 9;
 
-const RTP_PORT_TOP          = RTP_PORT_BASE + 200;
-const REMOTE_TIMEOUT_MS     = 5000;
-const AUDIO_IDLE_TIMEOUT_MS = 45000;
-const CALL_MAX_DURATION_MS  = 15 * 60 * 1000;
-
-// Set-based port allocator — no collisions between concurrent calls.
-const portsInUse = new Set();
+let nextPort = RTP_PORT_BASE;
 function pickRtpPort() {
-  for (let p = RTP_PORT_BASE; p < RTP_PORT_TOP; p += 2) {
-    if (!portsInUse.has(p)) { portsInUse.add(p); return p; }
-  }
-  throw new Error(`no free RTP port in ${RTP_PORT_BASE}-${RTP_PORT_TOP}`);
+  const p = nextPort;
+  nextPort += 2;
+  if (nextPort > RTP_PORT_BASE + 200) nextPort = RTP_PORT_BASE;
+  return p;
 }
-function releaseRtpPort(p) { portsInUse.delete(p); }
-
-// Active sessions — used for graceful SIGTERM/SIGINT drain.
-const sessions = new Set();
 
 // ---------- RTP helpers -------------------------------------------
 function rtpPayload(pkt) {
@@ -80,10 +70,8 @@ async function getChannelVar(ari, channelId, variable, retries = 8) {
 
 // ---------- Per-call handler --------------------------------------
 async function handleCall(ari, channel) {
-  const tag = `[${channel.id.slice(-6)}]`;
   const callerMsisdn = channel.caller?.number || null;
-  const startedAt = Date.now();
-  console.log(`${tag} [call] start ch=${channel.id} caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT}`);
+  console.log(`[call] start ch=${channel.id} caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT}`);
 
   const session = await createSession({ callerMsisdn, channelId: channel.id });
   const state   = newCallState({ sessionId: session.id, callerMsisdn });
@@ -99,7 +87,7 @@ async function handleCall(ari, channel) {
     sock.once("error", rej);
     sock.bind(localPort, "0.0.0.0", () => res());
   });
-  console.log(`${tag} [rtp] listening udp4 0.0.0.0:${localPort}`);
+  console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
 
   let remote     = null;
   const remotePt = FORCED_RTP_PT;     // 9 = G.722
@@ -118,12 +106,11 @@ async function handleCall(ari, channel) {
       connection_type: "client",
       direction: "both",
     });
-    console.log(`${tag} [ari] externalMedia ${externalChan.id} -> ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${remotePt}`);
+    console.log(`[ari] externalMedia ${externalChan.id} -> ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${remotePt}`);
   } catch (e) {
-    console.error(`${tag} [call] externalMedia failed`, e.message);
+    console.error("[call] externalMedia failed", e.message);
     await channel.hangup().catch(() => {});
     sock.close();
-    releaseRtpPort(localPort);
     return;
   }
 
@@ -132,10 +119,10 @@ async function handleCall(ari, channel) {
     const remotePort = await getChannelVar(ari, externalChan.id, "UNICASTRTP_LOCAL_PORT");
     if (remotePort) {
       remote = { address: remoteAddr, port: parseInt(remotePort, 10) };
-      console.log(`${tag} [rtp] seeded remote ${remote.address}:${remote.port}`);
+      console.log(`[rtp] seeded remote ${remote.address}:${remote.port}`);
     }
   } catch (e) {
-    console.warn(`${tag} [rtp] channelvar lookup failed: ${e.message}`);
+    console.warn(`[rtp] channelvar lookup failed: ${e.message}`);
   }
 
   const bridge = ari.Bridge();
@@ -150,10 +137,8 @@ async function handleCall(ari, channel) {
   let outboundCount  = 0;
   let firstSentLogged = false;
   let partialOutbound = Buffer.alloc(0);   // leftover slin16 16k bytes (< 640)
-  let lastAudioActivityAt = Date.now();
 
   function enqueueOutbound(pcm16Slin16k) {
-    lastAudioActivityAt = Date.now();
     const combined  = partialOutbound.length ? Buffer.concat([partialOutbound, pcm16Slin16k]) : pcm16Slin16k;
     const remainder = combined.length % FRAME_BYTES_SLIN16;
     const usable    = combined.length - remainder;
@@ -174,23 +159,20 @@ async function handleCall(ari, channel) {
     pacerTimer = setInterval(() => {
       if (!remote) return;
       const now = Date.now();
-      // Strict pacing: never burst-catch-up. Any drift >= one frame resets the
-      // clock to `now` so we always send exactly one 20ms frame per 20ms of
-      // wall time. Previously the 200ms threshold allowed 20-200ms of drift to
-      // drain as back-to-back packets on each 5ms tick — that played audio at
-      // up to 4x speed for short bursts ("sometimes speeding up").
-      if (now - nextSendAt > FRAME_MS) nextSendAt = now;
-      if (outQueue.length > 0 && now >= nextSendAt) {
+      if (now - nextSendAt > 200) nextSendAt = now;
+      let sent = 0;
+      while (outQueue.length > 0 && now >= nextSendAt && sent < 50) {
         const slice = outQueue.shift();
         const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
         ts = (ts + TS_INC_PER_FRAME) >>> 0;
         sock.send(pkt, remote.port, remote.address, (e) => {
-          if (e) console.error(`${tag} [rtp] send err`, e.message);
+          if (e) console.error("[rtp] send err", e.message);
         });
         outboundCount++;
+        sent++;
         if (!firstSentLogged) {
           console.log(
-            `${tag} [rtp] FIRST paced packet -> ${remote.address}:${remote.port} ` +
+            `[rtp] FIRST paced packet -> ${remote.address}:${remote.port} ` +
             `pt=${remotePt} payload=${slice.length}B header=12B total=${pkt.length}B ` +
             `ts_inc=${TS_INC_PER_FRAME}/pkt seq=${(seq - 1) & 0xffff} ssrc=0x${ssrc.toString(16)}`
           );
@@ -207,16 +189,6 @@ async function handleCall(ari, channel) {
       if (!remote) return;
       enqueueOutbound(pcm16Slin16k);
     },
-    // Barge-in: caller started speaking → drop queued AI audio so it stops mid-sentence.
-    // Requires openai.js to fire this on input_audio_buffer.speech_started. If older
-    // openai.js doesn't call it, no harm — just no barge-in.
-    onCallerSpeechStarted() {
-      if (outQueue.length > 0) {
-        console.log(`${tag} [barge-in] dropped ${outQueue.length} queued frames`);
-        outQueue.length = 0;
-        partialOutbound = Buffer.alloc(0);
-      }
-    },
     onClose() {},
   });
 
@@ -225,7 +197,7 @@ async function handleCall(ari, channel) {
   let rxPackets = 0;
   const rxTimer = setInterval(() => {
     console.log(
-      `${tag} [rtp] hb caller->bridge ${rxPackets}p ${rxBytes}b ` +
+      `[rtp] hb caller->bridge ${rxPackets}p ${rxBytes}b ` +
       `(avg ${rxPackets ? (rxBytes / rxPackets).toFixed(0) : 0}B/pkt, ${(rxPackets / 5).toFixed(1)} pps) | ` +
       `bridge->caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped · pt=${remotePt}`
     );
@@ -235,7 +207,7 @@ async function handleCall(ari, channel) {
   sock.on("message", (pkt, rinfo) => {
     if (!remote) {
       remote = rinfo;
-      console.log(`${tag} [rtp] no seeded remote; using inbound source ${rinfo.address}:${rinfo.port}`);
+      console.log(`[rtp] no seeded remote; using inbound source ${rinfo.address}:${rinfo.port}`);
     }
     const payload = rtpPayload(pkt);
     if (!payload || !payload.length) return;
@@ -243,49 +215,24 @@ async function handleCall(ari, channel) {
     rxPackets++;
     // G.722 -> slin16 LE @ 16 kHz, straight to OpenAI
     const slin16Buf = g722Dec.decode(payload);
-    lastAudioActivityAt = Date.now();
     oa.pushCallerAudio(slin16Buf);
   });
 
-  // ---------- Watchdogs ----------
-  const remoteWatchdog = setTimeout(() => {
-    if (!remote) console.warn(`${tag} [⚠] no remote address after ${REMOTE_TIMEOUT_MS}ms — TX won't send`);
-  }, REMOTE_TIMEOUT_MS);
-  const idleWatchdog = setInterval(() => {
-    const idle = Date.now() - lastAudioActivityAt;
-    if (idle > AUDIO_IDLE_TIMEOUT_MS) {
-      console.warn(`${tag} [⚠] no audio activity for ${(idle/1000).toFixed(0)}s — pipeline may be stuck`);
-    }
-  }, 10000);
-  const maxDurationWatchdog = setTimeout(() => {
-    console.warn(`${tag} [⚠] hit max duration ${CALL_MAX_DURATION_MS/60000}m — hanging up`);
-    cleanup("max_duration");
-  }, CALL_MAX_DURATION_MS);
-
-  const sess = { tag, cleanup: null };
-  sessions.add(sess);
   let cleaned = false;
   const cleanup = async (why) => {
     if (cleaned) return;
     cleaned = true;
-    const dur = ((Date.now() - startedAt) / 1000).toFixed(1);
-    console.log(`${tag} [call] end (${why}) dur=${dur}s · sent ${outboundCount}p queued=${outQueue.length} dropped=${droppedFrames}`);
+    console.log(`[call] end ch=${channel.id} (${why}) · sent ${outboundCount}p queued=${outQueue.length} dropped=${droppedFrames}`);
     clearInterval(rxTimer);
-    clearInterval(idleWatchdog);
-    clearTimeout(remoteWatchdog);
-    clearTimeout(maxDurationWatchdog);
     if (pacerTimer) clearInterval(pacerTimer);
     try { oa.close(); } catch {}
     try { sock.close(); } catch {}
-    releaseRtpPort(localPort);
     try { await bridge.destroy(); } catch {}
     try { await externalChan.hangup(); } catch {}
     try { await logEvent(state.sessionId, "call_end", why); } catch {}
     try { await endSession(state.sessionId); } catch {}
     try { g722Enc.reset?.(); g722Dec.reset?.(); } catch {}
-    sessions.delete(sess);
   };
-  sess.cleanup = cleanup;
   channel.once("StasisEnd",      () => cleanup("caller_hangup"));
   externalChan.once("StasisEnd", () => cleanup("media_end"));
 }
@@ -306,25 +253,8 @@ async function main() {
       channel.hangup().catch(() => {});
     });
   });
-  ari.on("WebSocketReconnecting", () => console.warn("[ari] ws reconnecting"));
-  ari.on("WebSocketConnected",    () => console.log("[ari] ws connected"));
-  ari.on("WebSocketMaxRetries",   () => {
-    console.error("[ari] ws gave up — exiting (systemd will restart)");
-    process.exit(1);
-  });
   await ari.start(APP_NAME);
   console.log(`[bridge] listening as ARI app "${APP_NAME}"`);
-
-  // Graceful shutdown — drain active calls before exit
-  for (const sig of ["SIGTERM", "SIGINT"]) {
-    process.on(sig, async () => {
-      console.log(`[bridge] ${sig} — draining ${sessions.size} active session(s)`);
-      for (const s of sessions) {
-        try { await s.cleanup(`shutdown_${sig}`); } catch {}
-      }
-      process.exit(0);
-    });
-  }
 }
 
 main().catch((e) => { console.error("[bridge] fatal", e); process.exit(1); });
