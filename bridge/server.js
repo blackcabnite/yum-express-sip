@@ -303,8 +303,25 @@ async function main() {
       channel.hangup().catch(() => {});
     });
   });
+  ari.on("WebSocketReconnecting", () => console.warn("[ari] ws reconnecting"));
+  ari.on("WebSocketConnected",    () => console.log("[ari] ws connected"));
+  ari.on("WebSocketMaxRetries",   () => {
+    console.error("[ari] ws gave up — exiting (systemd will restart)");
+    process.exit(1);
+  });
   await ari.start(APP_NAME);
   console.log(`[bridge] listening as ARI app "${APP_NAME}"`);
+
+  // Graceful shutdown — drain active calls before exit
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    process.on(sig, async () => {
+      console.log(`[bridge] ${sig} — draining ${sessions.size} active session(s)`);
+      for (const s of sessions) {
+        try { await s.cleanup(`shutdown_${sig}`); } catch {}
+      }
+      process.exit(0);
+    });
+  }
 }
 
 main().catch((e) => { console.error("[bridge] fatal", e); process.exit(1); });
