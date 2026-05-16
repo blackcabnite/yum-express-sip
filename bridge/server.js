@@ -26,13 +26,23 @@ const MAX_QUEUE_FRAMES   = 3000;   // 60s @ 50fps — absorb full AI utterances
 const AST_FORMAT    = process.env.AST_FORMAT || "g722";
 const FORCED_RTP_PT = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : 9;
 
-let nextPort = RTP_PORT_BASE;
+const RTP_PORT_TOP          = RTP_PORT_BASE + 200;
+const REMOTE_TIMEOUT_MS     = 5000;
+const AUDIO_IDLE_TIMEOUT_MS = 45000;
+const CALL_MAX_DURATION_MS  = 15 * 60 * 1000;
+
+// Set-based port allocator — no collisions between concurrent calls.
+const portsInUse = new Set();
 function pickRtpPort() {
-  const p = nextPort;
-  nextPort += 2;
-  if (nextPort > RTP_PORT_BASE + 200) nextPort = RTP_PORT_BASE;
-  return p;
+  for (let p = RTP_PORT_BASE; p < RTP_PORT_TOP; p += 2) {
+    if (!portsInUse.has(p)) { portsInUse.add(p); return p; }
+  }
+  throw new Error(`no free RTP port in ${RTP_PORT_BASE}-${RTP_PORT_TOP}`);
 }
+function releaseRtpPort(p) { portsInUse.delete(p); }
+
+// Active sessions — used for graceful SIGTERM/SIGINT drain.
+const sessions = new Set();
 
 // ---------- RTP helpers -------------------------------------------
 function rtpPayload(pkt) {
