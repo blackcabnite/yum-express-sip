@@ -80,8 +80,10 @@ async function getChannelVar(ari, channelId, variable, retries = 8) {
 
 // ---------- Per-call handler --------------------------------------
 async function handleCall(ari, channel) {
+  const tag = `[${channel.id.slice(-6)}]`;
   const callerMsisdn = channel.caller?.number || null;
-  console.log(`[call] start ch=${channel.id} caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT}`);
+  const startedAt = Date.now();
+  console.log(`${tag} [call] start ch=${channel.id} caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT}`);
 
   const session = await createSession({ callerMsisdn, channelId: channel.id });
   const state   = newCallState({ sessionId: session.id, callerMsisdn });
@@ -97,7 +99,7 @@ async function handleCall(ari, channel) {
     sock.once("error", rej);
     sock.bind(localPort, "0.0.0.0", () => res());
   });
-  console.log(`[rtp] listening udp4 0.0.0.0:${localPort}`);
+  console.log(`${tag} [rtp] listening udp4 0.0.0.0:${localPort}`);
 
   let remote     = null;
   const remotePt = FORCED_RTP_PT;     // 9 = G.722
@@ -116,11 +118,12 @@ async function handleCall(ari, channel) {
       connection_type: "client",
       direction: "both",
     });
-    console.log(`[ari] externalMedia ${externalChan.id} -> ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${remotePt}`);
+    console.log(`${tag} [ari] externalMedia ${externalChan.id} -> ${PUBLIC_HOST}:${localPort} format=${AST_FORMAT} pt=${remotePt}`);
   } catch (e) {
-    console.error("[call] externalMedia failed", e.message);
+    console.error(`${tag} [call] externalMedia failed`, e.message);
     await channel.hangup().catch(() => {});
     sock.close();
+    releaseRtpPort(localPort);
     return;
   }
 
@@ -129,10 +132,10 @@ async function handleCall(ari, channel) {
     const remotePort = await getChannelVar(ari, externalChan.id, "UNICASTRTP_LOCAL_PORT");
     if (remotePort) {
       remote = { address: remoteAddr, port: parseInt(remotePort, 10) };
-      console.log(`[rtp] seeded remote ${remote.address}:${remote.port}`);
+      console.log(`${tag} [rtp] seeded remote ${remote.address}:${remote.port}`);
     }
   } catch (e) {
-    console.warn(`[rtp] channelvar lookup failed: ${e.message}`);
+    console.warn(`${tag} [rtp] channelvar lookup failed: ${e.message}`);
   }
 
   const bridge = ari.Bridge();
@@ -147,8 +150,10 @@ async function handleCall(ari, channel) {
   let outboundCount  = 0;
   let firstSentLogged = false;
   let partialOutbound = Buffer.alloc(0);   // leftover slin16 16k bytes (< 640)
+  let lastAudioActivityAt = Date.now();
 
   function enqueueOutbound(pcm16Slin16k) {
+    lastAudioActivityAt = Date.now();
     const combined  = partialOutbound.length ? Buffer.concat([partialOutbound, pcm16Slin16k]) : pcm16Slin16k;
     const remainder = combined.length % FRAME_BYTES_SLIN16;
     const usable    = combined.length - remainder;
@@ -176,13 +181,13 @@ async function handleCall(ari, channel) {
         const pkt = buildRtpPacket({ seq: seq++, ts, ssrc, payload: slice, pt: remotePt });
         ts = (ts + TS_INC_PER_FRAME) >>> 0;
         sock.send(pkt, remote.port, remote.address, (e) => {
-          if (e) console.error("[rtp] send err", e.message);
+          if (e) console.error(`${tag} [rtp] send err`, e.message);
         });
         outboundCount++;
         sent++;
         if (!firstSentLogged) {
           console.log(
-            `[rtp] FIRST paced packet -> ${remote.address}:${remote.port} ` +
+            `${tag} [rtp] FIRST paced packet -> ${remote.address}:${remote.port} ` +
             `pt=${remotePt} payload=${slice.length}B header=12B total=${pkt.length}B ` +
             `ts_inc=${TS_INC_PER_FRAME}/pkt seq=${(seq - 1) & 0xffff} ssrc=0x${ssrc.toString(16)}`
           );
@@ -199,6 +204,16 @@ async function handleCall(ari, channel) {
       if (!remote) return;
       enqueueOutbound(pcm16Slin16k);
     },
+    // Barge-in: caller started speaking → drop queued AI audio so it stops mid-sentence.
+    // Requires openai.js to fire this on input_audio_buffer.speech_started. If older
+    // openai.js doesn't call it, no harm — just no barge-in.
+    onCallerSpeechStarted() {
+      if (outQueue.length > 0) {
+        console.log(`${tag} [barge-in] dropped ${outQueue.length} queued frames`);
+        outQueue.length = 0;
+        partialOutbound = Buffer.alloc(0);
+      }
+    },
     onClose() {},
   });
 
@@ -207,7 +222,7 @@ async function handleCall(ari, channel) {
   let rxPackets = 0;
   const rxTimer = setInterval(() => {
     console.log(
-      `[rtp] hb caller->bridge ${rxPackets}p ${rxBytes}b ` +
+      `${tag} [rtp] hb caller->bridge ${rxPackets}p ${rxBytes}b ` +
       `(avg ${rxPackets ? (rxBytes / rxPackets).toFixed(0) : 0}B/pkt, ${(rxPackets / 5).toFixed(1)} pps) | ` +
       `bridge->caller ${outboundCount}p sent · ${outQueue.length} queued · ${droppedFrames} dropped · pt=${remotePt}`
     );
@@ -217,7 +232,7 @@ async function handleCall(ari, channel) {
   sock.on("message", (pkt, rinfo) => {
     if (!remote) {
       remote = rinfo;
-      console.log(`[rtp] no seeded remote; using inbound source ${rinfo.address}:${rinfo.port}`);
+      console.log(`${tag} [rtp] no seeded remote; using inbound source ${rinfo.address}:${rinfo.port}`);
     }
     const payload = rtpPayload(pkt);
     if (!payload || !payload.length) return;
@@ -225,24 +240,49 @@ async function handleCall(ari, channel) {
     rxPackets++;
     // G.722 -> slin16 LE @ 16 kHz, straight to OpenAI
     const slin16Buf = g722Dec.decode(payload);
+    lastAudioActivityAt = Date.now();
     oa.pushCallerAudio(slin16Buf);
   });
 
+  // ---------- Watchdogs ----------
+  const remoteWatchdog = setTimeout(() => {
+    if (!remote) console.warn(`${tag} [⚠] no remote address after ${REMOTE_TIMEOUT_MS}ms — TX won't send`);
+  }, REMOTE_TIMEOUT_MS);
+  const idleWatchdog = setInterval(() => {
+    const idle = Date.now() - lastAudioActivityAt;
+    if (idle > AUDIO_IDLE_TIMEOUT_MS) {
+      console.warn(`${tag} [⚠] no audio activity for ${(idle/1000).toFixed(0)}s — pipeline may be stuck`);
+    }
+  }, 10000);
+  const maxDurationWatchdog = setTimeout(() => {
+    console.warn(`${tag} [⚠] hit max duration ${CALL_MAX_DURATION_MS/60000}m — hanging up`);
+    cleanup("max_duration");
+  }, CALL_MAX_DURATION_MS);
+
+  const sess = { tag, cleanup: null };
+  sessions.add(sess);
   let cleaned = false;
   const cleanup = async (why) => {
     if (cleaned) return;
     cleaned = true;
-    console.log(`[call] end ch=${channel.id} (${why}) · sent ${outboundCount}p queued=${outQueue.length} dropped=${droppedFrames}`);
+    const dur = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(`${tag} [call] end (${why}) dur=${dur}s · sent ${outboundCount}p queued=${outQueue.length} dropped=${droppedFrames}`);
     clearInterval(rxTimer);
+    clearInterval(idleWatchdog);
+    clearTimeout(remoteWatchdog);
+    clearTimeout(maxDurationWatchdog);
     if (pacerTimer) clearInterval(pacerTimer);
     try { oa.close(); } catch {}
     try { sock.close(); } catch {}
+    releaseRtpPort(localPort);
     try { await bridge.destroy(); } catch {}
     try { await externalChan.hangup(); } catch {}
     try { await logEvent(state.sessionId, "call_end", why); } catch {}
     try { await endSession(state.sessionId); } catch {}
     try { g722Enc.reset?.(); g722Dec.reset?.(); } catch {}
+    sessions.delete(sess);
   };
+  sess.cleanup = cleanup;
   channel.once("StasisEnd",      () => cleanup("caller_hangup"));
   externalChan.once("StasisEnd", () => cleanup("media_end"));
 }
