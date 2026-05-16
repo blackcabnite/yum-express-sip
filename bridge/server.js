@@ -59,8 +59,8 @@ const FRAME_MS             = 20;
 const FRAME_BYTES_SLIN16   = 640;     // 320 samples × 2 bytes @ 16kHz × 20ms
 const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = 160;     // RFC 3551 quirk: G.722 RTP clock = 8kHz
-const MAX_QUEUE_FRAMES     = 500;     // 10s headroom (was 3000=60s — too lenient)
-const MAX_BURST_PER_TICK   = 3;       // ≤60ms of "future" packets per 5ms tick
+const MAX_QUEUE_FRAMES     = 100;     // 2s cap; drop stale audio instead of building a delayed backlog
+const MAX_BURST_PER_TICK   = 1;       // NEVER catch up faster than real time; prevents speed-up/tripping
 
 const RTP_PORT_BASE        = 14000;
 const RTP_PORT_TOP         = 14200;
@@ -228,7 +228,8 @@ async function handleCall(ari, channel) {
     pacerTimer = setInterval(() => {
       if (!remote || outQueue.length === 0) return;
       const now = Date.now();
-      // Resync if we fell way behind (event loop blocked, or long silence)
+      // Resync if we fell way behind (event loop blocked, or long silence).
+      // We still send only one packet per tick, so audio never accelerates.
       if (now - nextSendAt > 200) nextSendAt = now;
       let sent = 0;
       while (outQueue.length > 0 && now >= nextSendAt && sent < MAX_BURST_PER_TICK) {
