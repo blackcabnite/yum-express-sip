@@ -59,7 +59,7 @@ const FRAME_MS             = 20;
 const FRAME_BYTES_SLIN16   = 640;     // 320 samples × 2 bytes @ 16kHz × 20ms
 const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = 160;     // RFC 3551 quirk: G.722 RTP clock = 8kHz
-const MAX_QUEUE_FRAMES     = 100;     // 2s cap; drop stale audio instead of building a delayed backlog
+const MAX_QUEUE_FRAMES     = 750;     // 15s cap; long final replies must not drop frames and sound sped-up
 const MAX_BURST_PER_TICK   = 1;       // NEVER catch up faster than real time; prevents speed-up/tripping
 
 const RTP_PORT_BASE        = 14000;
@@ -268,6 +268,7 @@ async function handleCall(ari, channel) {
         outQueue.length = 0;
         partialOutbound = Buffer.alloc(0);
       }
+      oa.cancelResponse?.();
     },
     onClose() {},
   });

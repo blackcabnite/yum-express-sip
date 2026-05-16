@@ -71,7 +71,7 @@ function resamplePCM16(input, fromRate, toRate, state) {
   return { out, state: { phase, prev: input.readInt16LE((inSamples - 1) * 2) } };
 }
 
-export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
+export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStarted, onClose }) {
   const ws = new WebSocket(REALTIME_URL, {
     headers: {
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -86,9 +86,20 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
   // contains a brief audio glitch (pop/click) before the voice properly starts.
   const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
   let skipRemaining = 0;
+  let activeResponseId = null;
+
+  function sendSafe(obj) {
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(JSON.stringify(obj));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   ws.on("open", () => {
-    ws.send(JSON.stringify({
+    sendSafe({
       type: "session.update",
       session: {
         modalities: ["audio", "text"],
@@ -102,12 +113,12 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
         tool_choice: "auto",
         temperature: 0.7,
       },
-    }));
+    });
     // Greet the caller immediately
-    ws.send(JSON.stringify({
+    sendSafe({
       type: "response.create",
       response: { modalities: ["audio", "text"], instructions: "Greet the caller warmly: 'Hi, you've reached Sweet Spot — what can I get for you today?'" },
-    }));
+    });
   });
 
   ws.on("message", async (raw) => {
@@ -148,10 +159,20 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
         break;
       }
       case "response.created": {
+        activeResponseId = msg.response?.id || null;
         // New response starting — arm the leading-glitch skip and reset
         // resampler state so we don't interpolate into stale samples.
         skipRemaining = SKIP_BYTES_PER_RESPONSE;
         downState = null;
+        break;
+      }
+      case "response.done":
+      case "response.cancelled": {
+        activeResponseId = null;
+        break;
+      }
+      case "input_audio_buffer.speech_started": {
+        onCallerSpeechStarted?.();
         break;
       }
       case "response.audio_transcript.done": {
@@ -174,11 +195,11 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
         let result;
         try { result = await execTool(state, name, args); }
         catch (e) { result = { ok: false, error: String(e) }; }
-        ws.send(JSON.stringify({
+        sendSafe({
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id, output: JSON.stringify(result) },
-        }));
-        ws.send(JSON.stringify({ type: "response.create" }));
+        });
+        sendSafe({ type: "response.create" });
         break;
       }
       case "error": {
@@ -203,7 +224,12 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
       upState = r.state;
       const pcm24 = r.out;
       if (pcm24.length === 0) return;
-      ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm24.toString("base64") }));
+      sendSafe({ type: "input_audio_buffer.append", audio: pcm24.toString("base64") });
+    },
+    cancelResponse() {
+      if (!activeResponseId) return;
+      sendSafe({ type: "response.cancel" });
+      activeResponseId = null;
     },
     close() { try { ws.close(); } catch {} },
   };
