@@ -45,37 +45,30 @@ function resamplePCM16(input, fromRate, toRate, state) {
   if (fromRate === toRate) return { out: input, state };
   const inSamples = input.length / 2;
   if (inSamples === 0) return { out: Buffer.alloc(0), state };
+
   const ratio = fromRate / toRate;            // input samples per output sample
-  const s = state || { pos: 0, last: 0 };     // pos is fractional index into "virtual" stream that includes prev.last at index -1
-  // Build a small helper: sample at integer index i where -1 returns s.last
-  const readAt = (i) => {
-    if (i < 0) return s.last;
-    if (i >= inSamples) return input.readInt16LE((inSamples - 1) * 2);
-    return input.readInt16LE(i * 2);
+  const prev = state?.prev ?? input.readInt16LE(0);
+  let phase = state?.phase ?? 0;              // fractional source position carried across chunks
+  const outSamples = Math.floor((inSamples - phase) / ratio);
+  const out = Buffer.alloc(Math.max(0, outSamples) * 2);
+
+  const readAt = (idx) => {
+    if (idx < 0) return prev;
+    if (idx >= inSamples) return input.readInt16LE((inSamples - 1) * 2);
+    return input.readInt16LE(idx * 2);
   };
-  // Determine how many output samples we can produce while staying within available input.
-  // pos starts somewhere in [0, 1). Last usable srcF is inSamples - 1 (so i1 = inSamples-1).
-  const outSamples = Math.max(0, Math.floor((inSamples - 1 - s.pos) / ratio) + 1);
-  const out = Buffer.alloc(outSamples * 2);
+
   for (let i = 0; i < outSamples; i++) {
-    const srcF = s.pos + i * ratio;
+    const srcF = phase + i * ratio;
     const i0 = Math.floor(srcF);
-    const i1 = i0 + 1;
     const t = srcF - i0;
-    const v = Math.round(readAt(i0) * (1 - t) + readAt(i1) * t);
+    const v = Math.round(readAt(i0) * (1 - t) + readAt(i0 + 1) * t);
     out.writeInt16LE(Math.max(-32768, Math.min(32767, v)), i * 2);
   }
-  // Advance position past consumed input; carry remainder into next call.
-  const consumedF = s.pos + outSamples * ratio;
-  const newState = {
-    pos: consumedF - inSamples,               // negative → next call's pos relative to its input start
-    last: input.readInt16LE((inSamples - 1) * 2),
-  };
-  // Normalize: pos should be in [0, 1) at start of next chunk. Because we read
-  // s.last at index -1, a pos of e.g. -0.3 means "next output sits 0.3 samples
-  // before the new chunk's first sample" → represent as pos=0.7 with last=prev.
-  if (newState.pos < 0) newState.pos = newState.pos + 1; // shift by 1 sample (the carried last)
-  return { out, state: newState };
+
+  phase = phase + outSamples * ratio - inSamples;
+  while (phase < 0) phase += ratio;
+  return { out, state: { phase, prev: input.readInt16LE((inSamples - 1) * 2) } };
 }
 
 export function openOpenAIRealtime({ state, onAudioToCaller, onClose }) {
