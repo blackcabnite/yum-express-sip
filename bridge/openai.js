@@ -71,6 +71,53 @@ function resamplePCM16(input, fromRate, toRate, state) {
   return { out, state: { phase, prev: input.readInt16LE((inSamples - 1) * 2) } };
 }
 
+// ─── Anti-alias low-pass (11-tap Hann-windowed sinc) ────────────────────────
+// Applied to 24 kHz PCM16 BEFORE decimation to 16 kHz. Without it, energy
+// above ~7 kHz folds back as aliasing → audible "trail"/lispy hiss after AI
+// speech (especially on sibilants). Coefficients precomputed for fc=7kHz @
+// 24kHz sample rate. State carries the last (N-1) samples across calls so
+// chunk boundaries don't click.
+const LPF_TAPS = (() => {
+  const N = 11;                          // odd → linear phase, integer group delay = 5
+  const fc = 7000 / 24000;               // normalized cutoff (cycles/sample)
+  const M = (N - 1) / 2;
+  const h = new Float32Array(N);
+  let sum = 0;
+  for (let n = 0; n < N; n++) {
+    const k = n - M;
+    const sinc = k === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * k) / (Math.PI * k);
+    const hann = 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / (N - 1));
+    h[n] = sinc * hann;
+    sum += h[n];
+  }
+  for (let n = 0; n < N; n++) h[n] /= sum;   // unity DC gain
+  return h;
+})();
+const LPF_N = LPF_TAPS.length;
+
+function lowpassPCM16(input, state) {
+  const inSamples = input.length / 2;
+  if (inSamples === 0) return { out: input, state };
+  const hist = state?.hist ?? new Int16Array(LPF_N - 1); // zeros on first call
+  const total = hist.length + inSamples;
+  const buf = new Int16Array(total);
+  for (let i = 0; i < hist.length; i++) buf[i] = hist[i];
+  for (let i = 0; i < inSamples; i++) buf[hist.length + i] = input.readInt16LE(i * 2);
+
+  const out = Buffer.alloc(inSamples * 2);
+  for (let i = 0; i < inSamples; i++) {
+    let acc = 0;
+    // Convolution: y[i] = Σ h[k] * x[i + (N-1) - k]   (so output aligns with newest sample chain)
+    for (let k = 0; k < LPF_N; k++) acc += LPF_TAPS[k] * buf[i + (LPF_N - 1 - k)];
+    const v = Math.max(-32768, Math.min(32767, Math.round(acc)));
+    out.writeInt16LE(v, i * 2);
+  }
+
+  const newHist = new Int16Array(LPF_N - 1);
+  for (let i = 0; i < newHist.length; i++) newHist[i] = buf[total - newHist.length + i];
+  return { out, state: { hist: newHist } };
+}
+
 export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStarted, onClose }) {
   const ws = new WebSocket(REALTIME_URL, {
     headers: {
@@ -82,6 +129,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   // Per-direction resampler state (carried across deltas to avoid boundary clicks).
   let downState = null;   // 24k → 16k (model → caller)
   let upState = null;     // 16k → 24k (caller → model)
+  let lpfState = null;    // anti-alias LPF state for 24k → 16k path
   // Skip first ~40ms of each model response — OpenAI's first delta sometimes
   // contains a brief audio glitch (pop/click) before the voice properly starts.
   const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
