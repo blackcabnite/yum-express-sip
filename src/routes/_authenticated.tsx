@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, redirect, Link, useRouter, useLocation } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { LogOut, PhoneCall, Receipt } from "lucide-react";
+import { LogOut, PhoneCall, Receipt, UtensilsCrossed } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async () => {
@@ -25,6 +25,7 @@ function AuthedLayout() {
 
   const navItems = [
     { to: "/", label: "Live calls", icon: PhoneCall },
+    { to: "/menu", label: "Menu", icon: UtensilsCrossed },
     { to: "/orders", label: "Orders", icon: Receipt },
   ] as const;
 
