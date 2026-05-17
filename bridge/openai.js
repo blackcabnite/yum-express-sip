@@ -182,7 +182,11 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         }
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
-        const r = resamplePCM16(pcm24, 24000, 16000, downState);
+        // Anti-alias LPF first (kills the lispy/hissy "trail" after speech),
+        // then linear resample.
+        const f = lowpassPCM16(pcm24, lpfState);
+        lpfState = f.state;
+        const r = resamplePCM16(f.out, 24000, 16000, downState);
         downState = r.state;
         const pcm16 = r.out;
         if (pcm16.length === 0) break;
@@ -212,6 +216,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         // resampler state so we don't interpolate into stale samples.
         skipRemaining = SKIP_BYTES_PER_RESPONSE;
         downState = null;
+        lpfState = null;
         break;
       }
       case "response.done":
