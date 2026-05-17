@@ -59,7 +59,7 @@ const FRAME_MS             = 20;
 const FRAME_BYTES_SLIN16   = 640;     // 320 samples × 2 bytes @ 16kHz × 20ms
 const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = 160;     // RFC 3551 quirk: G.722 RTP clock = 8kHz
-const MAX_QUEUE_FRAMES     = 750;     // 15s cap; long final replies must not drop frames and sound sped-up
+const MAX_QUEUE_FRAMES     = 3000;    // 60s cap; long AI replies must buffer fully without dropping frames
 const MAX_BURST_PER_TICK   = 1;       // NEVER catch up faster than real time; prevents speed-up/tripping
 
 const RTP_PORT_BASE        = 14000;
