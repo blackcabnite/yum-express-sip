@@ -350,8 +350,12 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   return {
     pushCallerAudio(pcm16Slin) {
       if (ws.readyState !== WebSocket.OPEN) return;
-      // Asterisk sends slin16 (PCM16 LE @ 16kHz). Resample up to 24kHz for OpenAI Realtime.
-      const r = resamplePCM16(pcm16Slin, 16000, 24000, upState);
+      // Asterisk sends slin16 (PCM16 LE @ 16kHz). Condition first (HPF +
+      // noise gate + AGC) to help OpenAI's VAD/transcription on soft/noisy
+      // callers, THEN upsample to 24kHz for OpenAI Realtime.
+      const c = conditionCallerPCM16(pcm16Slin, condState);
+      condState = c.state;
+      const r = resamplePCM16(c.out, 16000, 24000, upState);
       upState = r.state;
       const pcm24 = r.out;
       if (pcm24.length === 0) return;
