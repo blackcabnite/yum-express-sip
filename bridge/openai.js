@@ -118,6 +118,83 @@ function lowpassPCM16(input, state) {
   return { out, state: { hist: newHist } };
 }
 
+// ─── Caller-side audio conditioning ─────────────────────────────────────────
+// Applied to incoming slin16 (16 kHz PCM16 from Asterisk) BEFORE upsampling
+// to 24 kHz for OpenAI. Three stages, all stateful across chunks:
+//   1) One-pole high-pass (~60 Hz) — kills line rumble / DC offset.
+//   2) Soft-knee noise gate — attenuates background noise gradually instead
+//      of hard-cutting (preserves soft consonants like 's', 'f', 'th').
+//   3) Smoothed RMS auto-gain — boosts quiet talkers toward a target RMS
+//      without pumping. Gain change is rate-limited per chunk.
+// Ported from the Python taxi bridge; tuned for 16 kHz instead of 8 kHz.
+
+// One-pole HPF coefficient: a = exp(-2π * fc / fs), fc=60Hz @ 16kHz ≈ 0.9765
+const HPF_A = Math.exp((-2 * Math.PI * 60) / 16000);
+
+// Noise-gate thresholds (PCM16 amplitude units)
+const GATE_LOW = 25;        // below this: heavy attenuation
+const GATE_HIGH = 75;       // above this: pass through
+const GATE_FLOOR = 0.15;    // residual gain below the knee (not zero — keeps room tone natural)
+
+// AGC
+const AGC_TARGET_RMS = 2500;
+const AGC_MIN = 0.8;
+const AGC_MAX = 3.0;
+const AGC_SMOOTH = 0.2;     // 0..1, higher = faster gain tracking
+const AGC_RMS_FLOOR = 30;   // don't apply gain to near-silence
+
+function conditionCallerPCM16(input, state) {
+  const n = input.length / 2;
+  if (n === 0) return { out: input, state };
+
+  // HPF state carried across chunks
+  let hpfPrevIn = state?.hpfPrevIn ?? 0;
+  let hpfPrevOut = state?.hpfPrevOut ?? 0;
+  let gain = state?.gain ?? 1.0;
+
+  // Stage 1: HPF, write to float buffer
+  const f = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = input.readInt16LE(i * 2);
+    const y = HPF_A * (hpfPrevOut + x - hpfPrevIn);
+    f[i] = y;
+    hpfPrevIn = x;
+    hpfPrevOut = y;
+  }
+
+  // Stage 2: soft-knee gate
+  for (let i = 0; i < n; i++) {
+    const a = Math.abs(f[i]);
+    let g;
+    if (a >= GATE_HIGH) g = 1.0;
+    else if (a <= GATE_LOW) g = GATE_FLOOR;
+    else {
+      const t = (a - GATE_LOW) / (GATE_HIGH - GATE_LOW); // 0..1
+      g = GATE_FLOOR + (1.0 - GATE_FLOOR) * t;
+    }
+    f[i] *= g;
+  }
+
+  // Stage 3: smoothed AGC
+  let sumSq = 0;
+  for (let i = 0; i < n; i++) sumSq += f[i] * f[i];
+  const rms = Math.sqrt(sumSq / n);
+  if (rms > AGC_RMS_FLOOR) {
+    const target = Math.max(AGC_MIN, Math.min(AGC_MAX, AGC_TARGET_RMS / rms));
+    gain = gain + AGC_SMOOTH * (target - gain);
+    for (let i = 0; i < n; i++) f[i] *= gain;
+  }
+
+  // Pack back to PCM16 with clipping
+  const out = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-32768, Math.min(32767, Math.round(f[i])));
+    out.writeInt16LE(v, i * 2);
+  }
+
+  return { out, state: { hpfPrevIn, hpfPrevOut, gain } };
+}
+
 export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStarted, onClose }) {
   const ws = new WebSocket(REALTIME_URL, {
     headers: {
@@ -130,6 +207,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   let downState = null;   // 24k → 16k (model → caller)
   let upState = null;     // 16k → 24k (caller → model)
   let lpfState = null;    // anti-alias LPF state for 24k → 16k path
+  let condState = null;   // caller-side conditioning state (HPF + gate + AGC)
   // Skip first ~40ms of each model response — OpenAI's first delta sometimes
   // contains a brief audio glitch (pop/click) before the voice properly starts.
   const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
@@ -272,8 +350,12 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   return {
     pushCallerAudio(pcm16Slin) {
       if (ws.readyState !== WebSocket.OPEN) return;
-      // Asterisk sends slin16 (PCM16 LE @ 16kHz). Resample up to 24kHz for OpenAI Realtime.
-      const r = resamplePCM16(pcm16Slin, 16000, 24000, upState);
+      // Asterisk sends slin16 (PCM16 LE @ 16kHz). Condition first (HPF +
+      // noise gate + AGC) to help OpenAI's VAD/transcription on soft/noisy
+      // callers, THEN upsample to 24kHz for OpenAI Realtime.
+      const c = conditionCallerPCM16(pcm16Slin, condState);
+      condState = c.state;
+      const r = resamplePCM16(c.out, 16000, 24000, upState);
       upState = r.state;
       const pcm24 = r.out;
       if (pcm24.length === 0) return;
