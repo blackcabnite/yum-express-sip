@@ -53,12 +53,21 @@ const ARI_PASS             = process.env.ARI_PASS;
 const APP_NAME             = "sweetspot";
 const PUBLIC_HOST          = process.env.PUBLIC_HOST || "127.0.0.1";
 const AST_FORMAT           = process.env.AST_FORMAT || "g722";
-const FORCED_RTP_PT        = process.env.RTP_PT ? parseInt(process.env.RTP_PT, 10) : 9;
+// PT: 9 = G.722 static. slin16 has no static PT; Asterisk typically negotiates
+// a dynamic PT (often 118). Override via RTP_PT env when using slin16.
+const FORCED_RTP_PT        = process.env.RTP_PT
+  ? parseInt(process.env.RTP_PT, 10)
+  : (AST_FORMAT === "slin16" ? 118 : 9);
+const USE_SLIN16           = AST_FORMAT === "slin16";
 
 const FRAME_MS             = 20;
 const FRAME_BYTES_SLIN16   = 640;     // 320 samples × 2 bytes @ 16kHz × 20ms
 const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
-const TS_INC_PER_FRAME     = 160;     // RFC 3551 quirk: G.722 RTP clock = 8kHz
+// G.722: 8 kHz RTP clock (RFC 3551 quirk) → 160/frame.
+// slin16: real 16 kHz clock → 320/frame.
+const TS_INC_PER_FRAME     = USE_SLIN16 ? 320 : 160;
+// Outbound on-wire frame size depends on codec.
+const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
 const MAX_QUEUE_FRAMES     = 3000;    // 60s cap; long AI replies must buffer fully without dropping frames
 const MAX_BURST_PER_TICK   = 1;       // NEVER catch up faster than real time; prevents speed-up/tripping
 
@@ -120,7 +129,7 @@ async function handleCall(ari, channel) {
   const tag = `[${channel.id.slice(-6)}]`;
   const callerMsisdn = channel.caller?.number || null;
   const startedAt = Date.now();
-  console.log(`${tag} [call] start caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT}`);
+  console.log(`${tag} [call] start caller=${callerMsisdn} astFormat=${AST_FORMAT} pt=${FORCED_RTP_PT} ts_inc=${TS_INC_PER_FRAME} frame=${FRAME_BYTES_OUT}B`);
 
   const session = await createSession({ callerMsisdn, channelId: channel.id });
   const state   = newCallState({ sessionId: session.id, callerMsisdn });
@@ -128,8 +137,20 @@ async function handleCall(ari, channel) {
 
   // G.722 is stateful ADPCM — predictor state must be fresh per call,
   // otherwise the first audio of a new call decodes as garbage.
-  const g722Enc = new G722Encoder();
-  const g722Dec = new G722Decoder();
+  // Only allocate when actually using G.722.
+  const g722Enc = USE_SLIN16 ? null : new G722Encoder();
+  const g722Dec = USE_SLIN16 ? null : new G722Decoder();
+
+  // Asterisk slin16 on the wire is big-endian PCM16; our internal buffers
+  // (and OpenAI) use little-endian. Swap byte order in place on a copy.
+  function swap16(buf) {
+    const out = Buffer.allocUnsafe(buf.length);
+    for (let i = 0; i + 1 < buf.length; i += 2) {
+      out[i]     = buf[i + 1];
+      out[i + 1] = buf[i];
+    }
+    return out;
+  }
 
   const localPort = pickRtpPort();
   const sock = dgram.createSocket("udp4");
@@ -206,18 +227,23 @@ async function handleCall(ari, channel) {
 
     for (let off = 0; off < usable; off += FRAME_BYTES_SLIN16) {
       const slin16Frame = combined.slice(off, off + FRAME_BYTES_SLIN16);  // 640B PCM16
-      let g722Frame;
-      try {
-        g722Frame = g722Enc.encode(slin16Frame);                          // → 160B G.722
-      } catch (e) {
-        console.error(`${tag} [g722] encode err ${e.message}`);
-        continue;
+      let outFrame;
+      if (USE_SLIN16) {
+        // No codec — just byte-swap LE→BE for Asterisk slin16 on the wire.
+        outFrame = swap16(slin16Frame);
+      } else {
+        try {
+          outFrame = g722Enc.encode(slin16Frame);                          // → 160B G.722
+        } catch (e) {
+          console.error(`${tag} [g722] encode err ${e.message}`);
+          continue;
+        }
       }
       if (outQueue.length >= MAX_QUEUE_FRAMES) {
         outQueue.shift();
         droppedFrames++;
       }
-      outQueue.push(g722Frame);
+      outQueue.push(outFrame);
     }
     startPacer();
   }
@@ -292,10 +318,16 @@ async function handleCall(ari, channel) {
     rxBytes += payload.length;
     rxPackets++;
     try {
-      const slin16Buf = g722Dec.decode(payload);   // G.722 → slin16 @ 16kHz
+      let slin16Buf;
+      if (USE_SLIN16) {
+        // Asterisk slin16 RTP payload is big-endian PCM16 — swap to LE.
+        slin16Buf = swap16(payload);
+      } else {
+        slin16Buf = g722Dec.decode(payload);   // G.722 → slin16 @ 16kHz
+      }
       oa.pushCallerAudio(slin16Buf);
     } catch (e) {
-      console.error(`${tag} [g722] decode err ${e.message}`);
+      console.error(`${tag} [${USE_SLIN16 ? "slin16" : "g722"}] decode err ${e.message}`);
     }
   });
 
@@ -346,7 +378,7 @@ async function handleCall(ari, channel) {
     try { await channel.hangup(); } catch {}
     try { await logEvent(state.sessionId, "call_end", why); } catch {}
     try { await endSession(state.sessionId); } catch {}
-    try { g722Enc.reset?.(); g722Dec.reset?.(); } catch {}
+    try { g722Enc?.reset?.(); g722Dec?.reset?.(); } catch {}
     sessions.delete(sess);
   }
   sess.cleanup = cleanup;
