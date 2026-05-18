@@ -8,7 +8,7 @@ import { logEvent, updateSession } from "./supabase.js";
 const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17"}`;
 const VOICE = process.env.VOICE || "coral";
 
-const FORBIDDEN_SIZE_ASK_RE = /\b(small,?\s+regular,?\s+(?:or\s+)?large|small,?\s+regular|regular\s+or\s+large|would you like .*\b(?:small|regular|large)\b.*\b(?:small|regular|large)\b|in small|as small|what size|which size)\b/i;
+const FORBIDDEN_SIZE_ASK_RE = /\b(small,?\s+regular,?\s+(?:or\s+)?large|small,?\s+regular|regular\s+or\s+large|would you like (?:the )?sweet spot special|waffles?\s+or\s+cookie dough|would you like .*\b(?:regular size|small|regular|large)\b|do you want .*\b(?:regular size|small|regular|large)\b|in small|as small|what size|which size)\b/i;
 
 function systemPrompt() {
   return [
@@ -21,11 +21,14 @@ function systemPrompt() {
     "",
     "CORE RULES",
     "- When the caller orders something, IMMEDIATELY call add_item. DO NOT ask about size — the greeting tells the caller all prices are Regular by default. Only use a non-Regular size if the caller themselves volunteers the word 'small' or 'large' as part of that exact order.",
+    "- Voice alias: if the transcript says 'carrot chai', 'karrot chai', or similar, treat it as Karak Chai.",
     "- SIZES ARE FIXED: EVERY waffle and EVERY cookie dough comes in exactly three sizes — Small (£5.25), Regular (£6.45), Large (£7.95). If the caller asks what sizes are available, tell them all three. Never invent a 2-size answer.",
     "- DEFAULT SIZE = Regular. Pass size: 'Reg' to add_item unless the caller said 'small' or 'large'. Do NOT ask 'small, regular, or large?', 'what size?', or any size-selection question — silently use Regular.",
-    "- ABSOLUTE RULE: If caller says 'Sweet Spot Special', treat it as Sweet Spot Special Waffle, call add_item with size:'Reg', then continue. Never ask its size.",
+    "- ABSOLUTE RULE: If caller says 'Sweet Spot Special' or 'Sweet Spot Specials' without saying cookie dough, cheesecake, or sundae, treat it as Sweet Spot Special Waffle, call add_item with size:'Reg', then continue. Never ask whether it is waffle or cookie dough. Never ask its size.",
+    "- If caller says 'as waffle' after Sweet Spot Special, call add_item({name:'Sweet Spot Special Waffle', size:'Reg'}) immediately. Do NOT ask a size follow-up.",
     "- WRONG: Caller: 'one Sweet Spot Special and one Karak Chai.' Assistant: 'Would you like the Sweet Spot Special Waffle in small, regular, or large?'",
     "- RIGHT: Caller: 'one Sweet Spot Special and one Karak Chai.' Assistant calls add_item({name:'Sweet Spot Special Waffle', size:'Reg', qty:1}) and add_item({name:'Karak Chai', qty:1}).",
+    "- RIGHT: Caller: 'one carrot chai and two Sweet Spot Special.' Assistant calls add_item({name:'Karak Chai', qty:1}) and add_item({name:'Sweet Spot Special Waffle', size:'Reg', qty:2}).",
     "- RIGHT: Caller: 'one small Sweet Spot Special.' Assistant calls add_item({name:'Sweet Spot Special Waffle', size:'Sml', qty:1}).",
     "- After each add, read the running total spoken as words ('six pounds and forty-five pence', never the £ symbol).",
     "- After at least one item, ask 'Anything else?' — UNLESS you owe the caller a follow-up question first.",
@@ -401,6 +404,9 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         break;
       }
       case "error": {
+        if (/Cancellation failed:\s*no active response found/i.test(msg.error?.message || "")) {
+          break;
+        }
         console.error("[openai] error", JSON.stringify(msg.error || msg));
         await logEvent(state.sessionId, "openai_error", msg.error?.message || "unknown", msg);
         break;
