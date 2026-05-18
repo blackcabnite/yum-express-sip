@@ -72,14 +72,12 @@ const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = USE_SLIN16 ? 320 : 160;
 // Outbound on-wire frame size depends on codec.
 const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
-// Conversational latency caps. AI can emit speech faster than realtime; if we
-// faithfully buffer it all, the caller hears stale audio and interruptions
-// stop working. Once the queue exceeds HARD_QUEUE_FRAMES (~1s), shed back to
-// TARGET_QUEUE_FRAMES (~500ms) so playback stays fresh.
+// Queue policy: keep latency bounded. If OpenAI gets ahead of realtime,
+// drop OLD audio rather than letting latency grow forever. For voice agents
+// conversational responsiveness > phoneme completeness.
 const TARGET_QUEUE_FRAMES  = 25;      // 500ms @ 20ms/frame
-const HARD_QUEUE_FRAMES    = 50;      // 1s   @ 20ms/frame
-const MAX_QUEUE_FRAMES     = 3000;    // absolute safety cap (60s)
-const MAX_BURST_PER_TICK   = 1;       // NEVER catch up faster than real time; prevents speed-up/tripping
+const HARD_QUEUE_FRAMES    = 75;      // 1.5s absolute max
+const MAX_BURST_PER_TICK   = 2;       // 2 @ 5ms tick = 400pps theoretical catch-up
 
 const RTP_PORT_BASE        = 14000;
 const RTP_PORT_TOP         = 14200;
