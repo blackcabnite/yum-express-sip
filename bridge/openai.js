@@ -143,6 +143,24 @@ const AGC_MAX = 3.0;
 const AGC_SMOOTH = 0.2;     // 0..1, higher = faster gain tracking
 const AGC_RMS_FLOOR = 30;   // don't apply gain to near-silence
 
+// ─── Output-side noise gate (model → caller) ────────────────────────────────
+// G.722 ADPCM amplifies low-level noise into an audible hash, especially
+// during pauses between words. Compute per-frame RMS and zero the frame if
+// it's below threshold. Stateless — applied per chunk on the final 16 kHz
+// PCM right before it leaves for Asterisk.
+const OUT_GATE_RMS = 250;   // ↑ for less hiss, ↓ if soft consonants clip
+function outputNoiseGate(pcm16) {
+  const n = pcm16.length / 2;
+  if (n === 0) return pcm16;
+  let sumSq = 0;
+  for (let i = 0; i < n; i++) {
+    const s = pcm16.readInt16LE(i * 2);
+    sumSq += s * s;
+  }
+  const rms = Math.sqrt(sumSq / n);
+  return rms < OUT_GATE_RMS ? Buffer.alloc(pcm16.length) : pcm16;
+}
+
 function conditionCallerPCM16(input, state) {
   const n = input.length / 2;
   if (n === 0) return { out: input, state };
@@ -254,15 +272,23 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         let pcm24 = Buffer.from(msg.delta, "base64");
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
-        // NOTE: this matches the known-good original (May 15) path —
-        // raw linear resample with stateful continuity, NO LPF, NO leading
-        // skip, NO per-response state reset. Each of those added a
-        // mid-stream discontinuity that showed up as an audible artefact
-        // riding over the voice.
-        const r = resamplePCM16(pcm24, 24000, 16000, downState);
+        // Anti-alias LPF (fc=7 kHz) applied BEFORE decimation — without it
+        // energy above 8 kHz folds back as a constant high-freq hiss that
+        // G.722's ADPCM then encodes audibly. State is persistent for the
+        // whole call (NEVER reset per-response) so chunk boundaries stay
+        // glitch-free.
+        const lp = lowpassPCM16(pcm24, lpfState);
+        lpfState = lp.state;
+        const r = resamplePCM16(lp.out, 24000, 16000, downState);
         downState = r.state;
-        const pcm16 = r.out;
+        let pcm16 = r.out;
         if (pcm16.length === 0) break;
+        // Output noise gate: silence between words is encoded as low-level
+        // noise by both OpenAI and G.722 — gate frames whose RMS is below
+        // ~250 to true zero so the caller hears clean silence (Asterisk
+        // fills with comfort noise). Threshold is conservative; raise to
+        // 400 if hiss persists, lower to 150 if soft consonants get cut.
+        pcm16 = outputNoiseGate(pcm16);
         if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
         const d = openOpenAIRealtime._audDbg;
         d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
