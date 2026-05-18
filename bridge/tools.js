@@ -43,7 +43,37 @@ function normaliseAddArgs(args = {}) {
   return next;
 }
 
+function normaliseBatchItems(args = {}) {
+  const source = Array.isArray(args.items) ? args.items : Array.isArray(args) ? args : [];
+  return source
+    .map((item) => normaliseAddArgs(item || {}))
+    .filter((item) => String(item.name || "").trim());
+}
+
 export const TOOL_SCHEMAS = [
+  {
+    type: "function",
+    name: "record_items",
+    description: "Add one or more ordered items to the cart in a single call. Default waffles and cookie dough to Reg unless the caller explicitly said small or large. Sweet Spot Special without a category means Sweet Spot Special Waffle Reg. carrot/karrot chai means Karak Chai.",
+    parameters: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              size: { type: "string", description: "Sml, Reg, or Lrg. Use Reg by default for sized desserts." },
+              qty: { type: "integer", minimum: 1, default: 1 },
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
   {
     type: "function",
     name: "add_item",
@@ -90,6 +120,19 @@ export const TOOL_SCHEMAS = [
 
 export async function execTool(state, name, args) {
   switch (name) {
+    case "record_items": {
+      const items = normaliseBatchItems(args);
+      if (!items.length) return { ok: false, error: "No valid items supplied." };
+      const added = [];
+      const errors = [];
+      for (const itemArgs of items) {
+        const result = await execTool(state, "add_item", itemArgs);
+        if (result.ok) added.push(result.added);
+        else errors.push({ item: itemArgs, error: result.error });
+      }
+      return { ok: errors.length === 0, added, errors, cart: state.cart, total_pence: cartTotal(state.cart) };
+    }
+
     case "add_item": {
       args = normaliseAddArgs(args);
       const item = findItem(args.name);
