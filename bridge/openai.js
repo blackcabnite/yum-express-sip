@@ -143,10 +143,6 @@ const AGC_MAX = 3.0;
 const AGC_SMOOTH = 0.2;     // 0..1, higher = faster gain tracking
 const AGC_RMS_FLOOR = 30;   // don't apply gain to near-silence
 
-function conditionCallerPCM16(input, state) {
-  // (see below for caller-side conditioning body)
-}
-
 // ─── Output-side noise gate (model → caller) ────────────────────────────────
 // G.722 ADPCM amplifies low-level noise into an audible hash, especially
 // during pauses between words. Compute per-frame RMS and zero the frame if
@@ -165,7 +161,7 @@ function outputNoiseGate(pcm16) {
   return rms < OUT_GATE_RMS ? Buffer.alloc(pcm16.length) : pcm16;
 }
 
-function conditionCallerPCM16Real(input, state) {
+function conditionCallerPCM16(input, state) {
   const n = input.length / 2;
   if (n === 0) return { out: input, state };
 
