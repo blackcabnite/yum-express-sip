@@ -144,6 +144,28 @@ const AGC_SMOOTH = 0.2;     // 0..1, higher = faster gain tracking
 const AGC_RMS_FLOOR = 30;   // don't apply gain to near-silence
 
 function conditionCallerPCM16(input, state) {
+  // (see below for caller-side conditioning body)
+}
+
+// ─── Output-side noise gate (model → caller) ────────────────────────────────
+// G.722 ADPCM amplifies low-level noise into an audible hash, especially
+// during pauses between words. Compute per-frame RMS and zero the frame if
+// it's below threshold. Stateless — applied per chunk on the final 16 kHz
+// PCM right before it leaves for Asterisk.
+const OUT_GATE_RMS = 250;   // ↑ for less hiss, ↓ if soft consonants clip
+function outputNoiseGate(pcm16) {
+  const n = pcm16.length / 2;
+  if (n === 0) return pcm16;
+  let sumSq = 0;
+  for (let i = 0; i < n; i++) {
+    const s = pcm16.readInt16LE(i * 2);
+    sumSq += s * s;
+  }
+  const rms = Math.sqrt(sumSq / n);
+  return rms < OUT_GATE_RMS ? Buffer.alloc(pcm16.length) : pcm16;
+}
+
+function conditionCallerPCM16Real(input, state) {
   const n = input.length / 2;
   if (n === 0) return { out: input, state };
 
