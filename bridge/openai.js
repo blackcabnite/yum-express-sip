@@ -243,6 +243,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   let upState = null;     // 16k → 24k (caller → model)
   let lpfState = null;    // anti-alias LPF state for 24k → 16k path
   let condState = null;   // caller-side conditioning state (HPF + gate + AGC)
+  let gateState = null;   // output noise-gate hangover state (model → caller)
   // Skip first ~40ms of each model response — OpenAI's first delta sometimes
   // contains a brief audio glitch (pop/click) before the voice properly starts.
   const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
