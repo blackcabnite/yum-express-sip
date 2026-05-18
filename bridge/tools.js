@@ -21,11 +21,33 @@ async function syncCart(state) {
   await updateSession(state.sessionId, { cart: state.cart });
 }
 
+function normaliseSize(size) {
+  const s = String(size || "").toLowerCase().trim();
+  if (!s) return null;
+  if (/^(sml|small)\b/.test(s)) return "Sml";
+  if (/^(lrg|large)\b/.test(s)) return "Lrg";
+  if (/^(reg|regular)\b/.test(s)) return "Reg";
+  return size;
+}
+
+function normaliseAddArgs(args = {}) {
+  const next = { ...args };
+  const rawName = String(next.name || "");
+  const q = rawName.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (/\b(?:carrot|karrot|kara)\s+chai\b/.test(q)) next.name = "Karak Chai";
+  if (/\bsweet\s+spot\s+specials?\b/.test(q) && !/\b(cookie|dough|cheesecake|sundae)\b/.test(q)) {
+    next.name = "Sweet Spot Special Waffle";
+    if (!next.size) next.size = "Reg";
+  }
+  next.size = normaliseSize(next.size);
+  return next;
+}
+
 export const TOOL_SCHEMAS = [
   {
     type: "function",
     name: "add_item",
-    description: "Add an item to the order immediately. For waffles and cookie dough, NEVER ask for size first: default to Reg unless the caller explicitly said small or large in this same request.",
+    description: "Add an item to the order immediately. For waffles and cookie dough, NEVER ask for size first: default to Reg unless the caller explicitly said small or large in this same request. If caller says Sweet Spot Special without a category, add Sweet Spot Special Waffle Reg. If caller says carrot/karrot chai, add Karak Chai.",
     parameters: {
       type: "object",
       properties: {
@@ -69,6 +91,7 @@ export const TOOL_SCHEMAS = [
 export async function execTool(state, name, args) {
   switch (name) {
     case "add_item": {
+      args = normaliseAddArgs(args);
       const item = findItem(args.name);
       if (!item) {
         await logEvent(state.sessionId, "tool_add_miss", args.name, args);

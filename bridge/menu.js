@@ -122,8 +122,16 @@ export const MENU = [
 
 const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+function voiceAlias(q) {
+  if (/\b(?:carrot|karrot|kara)\s+chai\b/.test(q)) return "karak chai";
+  if (/\bsweet\s+spot\s+specials?\b/.test(q) && !/\b(cookie|dough|cheesecake|sundae)\b/.test(q)) {
+    return "sweet spot special waffle";
+  }
+  return q;
+}
+
 export function findItem(name) {
-  const q = norm(name);
+  const q = voiceAlias(norm(name));
   if (!q) return null;
   let m = MENU.find((it) => norm(it.base) === q);
   if (m) return m;
