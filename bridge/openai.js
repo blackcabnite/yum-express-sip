@@ -255,6 +255,8 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
   let skipRemaining = 0;
   let activeResponseId = null;
+  let responseTranscriptSoFar = "";
+  let suppressCurrentResponse = false;
 
   function sendSafe(obj) {
     if (ws.readyState !== WebSocket.OPEN) return false;
@@ -293,6 +295,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
     switch (msg.type) {
       case "response.audio.delta": {
+        if (suppressCurrentResponse) break;
         let pcm24 = Buffer.from(msg.delta, "base64");
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
@@ -337,6 +340,8 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
       }
       case "response.created": {
         activeResponseId = msg.response?.id || null;
+        responseTranscriptSoFar = "";
+        suppressCurrentResponse = false;
         // Intentionally do NOT reset downState/lpfState here. Resetting
         // mid-call restarts the resampler with phase=0 and prev=first
         // sample, which produces a small click at the start of each AI
@@ -360,6 +365,18 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
           }
           await updateSession(state.sessionId, { last_ai_line: msg.transcript });
           await logEvent(state.sessionId, "ai_speech", msg.transcript);
+        }
+        break;
+      }
+      case "response.audio_transcript.delta": {
+        if (msg.delta) {
+          responseTranscriptSoFar += msg.delta;
+          if (!suppressCurrentResponse && FORBIDDEN_SIZE_ASK_RE.test(responseTranscriptSoFar)) {
+            suppressCurrentResponse = true;
+            if (activeResponseId) sendSafe({ type: "response.cancel" });
+            activeResponseId = null;
+            await logEvent(state.sessionId, "blocked_size_question", responseTranscriptSoFar);
+          }
         }
         break;
       }
