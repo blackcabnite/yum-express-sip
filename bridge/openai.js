@@ -147,19 +147,35 @@ const AGC_RMS_FLOOR = 30;   // don't apply gain to near-silence
 // ─── Output-side noise gate (model → caller) ────────────────────────────────
 // G.722 ADPCM amplifies low-level noise into an audible hash, especially
 // during pauses between words. Compute per-frame RMS and zero the frame if
-// it's below threshold. Stateless — applied per chunk on the final 16 kHz
-// PCM right before it leaves for Asterisk.
-const OUT_GATE_RMS = 250;   // ↑ for less hiss, ↓ if soft consonants clip
-function outputNoiseGate(pcm16) {
-  const n = pcm16.length / 2;
-  if (n === 0) return pcm16;
-  let sumSq = 0;
-  for (let i = 0; i < n; i++) {
-    const s = pcm16.readInt16LE(i * 2);
-    sumSq += s * s;
+// it's below threshold. Stateful with HANGOVER: once a loud sub-frame
+// opens the gate, it stays open for HOLD_FRAMES quiet frames so the
+// natural decay/tail of each word passes through (no end-of-sentence
+// clipping). Processes in 20ms (640-byte @ 16 kHz mono PCM16) sub-frames.
+const OUT_GATE_RMS    = 200;   // open threshold (↑ less hiss, ↓ softer onsets)
+const OUT_GATE_HOLD   = 12;    // sub-frames to stay open after last loud frame (~240ms)
+const OUT_FRAME_BYTES = 640;   // 20ms @ 16 kHz, 16-bit mono
+function outputNoiseGate(pcm16, state) {
+  if (pcm16.length === 0) return { out: pcm16, state: state || { hold: 0 } };
+  let hold = state?.hold ?? 0;
+  const out = Buffer.alloc(pcm16.length);
+  for (let off = 0; off < pcm16.length; off += OUT_FRAME_BYTES) {
+    const end = Math.min(off + OUT_FRAME_BYTES, pcm16.length);
+    const n = (end - off) / 2;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) {
+      const s = pcm16.readInt16LE(off + i * 2);
+      sumSq += s * s;
+    }
+    const rms = Math.sqrt(sumSq / n);
+    if (rms >= OUT_GATE_RMS) {
+      hold = OUT_GATE_HOLD;
+      pcm16.copy(out, off, off, end);
+    } else if (hold > 0) {
+      hold--;
+      pcm16.copy(out, off, off, end);
+    } // else leave zeros (Buffer.alloc default)
   }
-  const rms = Math.sqrt(sumSq / n);
-  return rms < OUT_GATE_RMS ? Buffer.alloc(pcm16.length) : pcm16;
+  return { out, state: { hold } };
 }
 
 function conditionCallerPCM16(input, state) {
@@ -227,6 +243,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
   let upState = null;     // 16k → 24k (caller → model)
   let lpfState = null;    // anti-alias LPF state for 24k → 16k path
   let condState = null;   // caller-side conditioning state (HPF + gate + AGC)
+  let gateState = null;   // output noise-gate hangover state (model → caller)
   // Skip first ~40ms of each model response — OpenAI's first delta sometimes
   // contains a brief audio glitch (pop/click) before the voice properly starts.
   const SKIP_BYTES_PER_RESPONSE = 24000 * 2 * 0.04; // 40ms @ 24kHz PCM16 = 1920B
@@ -289,7 +306,9 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         // ~250 to true zero so the caller hears clean silence (Asterisk
         // fills with comfort noise). Threshold is conservative; raise to
         // 400 if hiss persists, lower to 150 if soft consonants get cut.
-        pcm16 = outputNoiseGate(pcm16);
+        const ng = outputNoiseGate(pcm16, gateState);
+        gateState = ng.state;
+        pcm16 = ng.out;
         if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
         const d = openOpenAIRealtime._audDbg;
         d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
