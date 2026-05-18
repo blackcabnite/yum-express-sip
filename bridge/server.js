@@ -59,6 +59,10 @@ const FORCED_RTP_PT        = process.env.RTP_PT
   ? parseInt(process.env.RTP_PT, 10)
   : (AST_FORMAT === "slin16" ? 118 : 9);
 const USE_SLIN16           = AST_FORMAT === "slin16";
+// Asterisk slin16 RTP byte order: most modern builds on x86 send native LE
+// (matches OpenAI's PCM16 LE), but RFC 3551 L16 spec is big-endian. If audio
+// is garbage/static, set SLIN16_SWAP=1 and restart to flip byte order.
+const SLIN16_SWAP          = process.env.SLIN16_SWAP === "1";
 
 const FRAME_MS             = 20;
 const FRAME_BYTES_SLIN16   = 640;     // 320 samples × 2 bytes @ 16kHz × 20ms
@@ -229,8 +233,8 @@ async function handleCall(ari, channel) {
       const slin16Frame = combined.slice(off, off + FRAME_BYTES_SLIN16);  // 640B PCM16
       let outFrame;
       if (USE_SLIN16) {
-        // No codec — just byte-swap LE→BE for Asterisk slin16 on the wire.
-        outFrame = swap16(slin16Frame);
+        // No codec. Byte-swap only if SLIN16_SWAP=1 (RFC big-endian wire format).
+        outFrame = SLIN16_SWAP ? swap16(slin16Frame) : slin16Frame;
       } else {
         try {
           outFrame = g722Enc.encode(slin16Frame);                          // → 160B G.722
@@ -320,8 +324,7 @@ async function handleCall(ari, channel) {
     try {
       let slin16Buf;
       if (USE_SLIN16) {
-        // Asterisk slin16 RTP payload is big-endian PCM16 — swap to LE.
-        slin16Buf = swap16(payload);
+        slin16Buf = SLIN16_SWAP ? swap16(payload) : payload;
       } else {
         slin16Buf = g722Dec.decode(payload);   // G.722 → slin16 @ 16kHz
       }
