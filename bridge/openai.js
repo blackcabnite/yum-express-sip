@@ -254,15 +254,23 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         let pcm24 = Buffer.from(msg.delta, "base64");
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
-        // NOTE: this matches the known-good original (May 15) path —
-        // raw linear resample with stateful continuity, NO LPF, NO leading
-        // skip, NO per-response state reset. Each of those added a
-        // mid-stream discontinuity that showed up as an audible artefact
-        // riding over the voice.
-        const r = resamplePCM16(pcm24, 24000, 16000, downState);
+        // Anti-alias LPF (fc=7 kHz) applied BEFORE decimation — without it
+        // energy above 8 kHz folds back as a constant high-freq hiss that
+        // G.722's ADPCM then encodes audibly. State is persistent for the
+        // whole call (NEVER reset per-response) so chunk boundaries stay
+        // glitch-free.
+        const lp = lowpassPCM16(pcm24, lpfState);
+        lpfState = lp.state;
+        const r = resamplePCM16(lp.out, 24000, 16000, downState);
         downState = r.state;
-        const pcm16 = r.out;
+        let pcm16 = r.out;
         if (pcm16.length === 0) break;
+        // Output noise gate: silence between words is encoded as low-level
+        // noise by both OpenAI and G.722 — gate frames whose RMS is below
+        // ~250 to true zero so the caller hears clean silence (Asterisk
+        // fills with comfort noise). Threshold is conservative; raise to
+        // 400 if hiss persists, lower to 150 if soft consonants get cut.
+        pcm16 = outputNoiseGate(pcm16);
         if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
         const d = openOpenAIRealtime._audDbg;
         d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
