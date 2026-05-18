@@ -19,6 +19,7 @@ function systemPrompt() {
     "",
     "CORE RULES",
     "- When the caller orders something, IMMEDIATELY call add_item. If it has size variants and they didn't say, ASK first ('small, regular, or large?') — never guess.",
+    "- SIZES ARE FIXED: EVERY waffle and EVERY cookie dough comes in exactly three sizes — Small (£5.25), Regular (£6.45), Large (£7.95). This applies to ALL flavours including Sweet Spot Special, Unicorn, Lotus Biscoff, etc. NEVER tell the caller a waffle or cookie dough only has two sizes. NEVER offer or invent any size other than Small, Regular, or Large.",
     "- Default size for sized items (waffle / cookie dough) is Regular only if the caller explicitly says 'whatever' or 'normal'.",
     "- After each add, read the running total spoken as words ('six pounds and forty-five pence', never the £ symbol).",
     "- After at least one item, ask 'Anything else?' — UNLESS you owe the caller a follow-up question first.",
