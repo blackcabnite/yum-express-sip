@@ -306,7 +306,9 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         // ~250 to true zero so the caller hears clean silence (Asterisk
         // fills with comfort noise). Threshold is conservative; raise to
         // 400 if hiss persists, lower to 150 if soft consonants get cut.
-        pcm16 = outputNoiseGate(pcm16);
+        const ng = outputNoiseGate(pcm16, gateState);
+        gateState = ng.state;
+        pcm16 = ng.out;
         if (!openOpenAIRealtime._audDbg) openOpenAIRealtime._audDbg = { n: 0, bytesIn: 0, bytesOut: 0, t0: Date.now() };
         const d = openOpenAIRealtime._audDbg;
         d.n++; d.bytesIn += pcm24.length; d.bytesOut += pcm16.length;
