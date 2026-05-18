@@ -78,6 +78,7 @@ const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
 const TARGET_QUEUE_FRAMES  = 25;      // 500ms @ 20ms/frame
 const HARD_QUEUE_FRAMES    = 75;      // 1.5s absolute max
 const MAX_BURST_PER_TICK   = 2;       // 2 @ 5ms tick = 400pps theoretical catch-up
+const BRIDGE_BUILD_ID      = "queue-shed-target25-hard75-2026-05-18";
 
 const RTP_PORT_BASE        = 14000;
 const RTP_PORT_TOP         = 14200;
@@ -223,6 +224,14 @@ async function handleCall(ari, channel) {
   let partialOutbound = Buffer.alloc(0);  // leftover slin16 bytes (< 640)
   let lastAudioActivityAt = Date.now();
 
+  function shedStaleQueue() {
+    if (outQueue.length <= HARD_QUEUE_FRAMES) return;
+    const drop = outQueue.length - TARGET_QUEUE_FRAMES;
+    outQueue.splice(0, drop);
+    droppedFrames += drop;
+    console.warn(`${tag} [queue] shed ${drop} stale frames q=${outQueue.length}`);
+  }
+
   function enqueueOutbound(pcm16Slin16k) {
     lastAudioActivityAt = Date.now();
     // Carry partial-frame bytes across chunks (OpenAI deltas aren't 20ms-aligned).
@@ -248,15 +257,7 @@ async function handleCall(ari, channel) {
         }
       }
       outQueue.push(outFrame);
-      // Shed stale frames once we're more than ~1s ahead of realtime. Keeping
-      // only the freshest ~500ms makes barge-in responsive and prevents the
-      // bridge from talking over itself after an OpenAI burst.
-      if (outQueue.length > HARD_QUEUE_FRAMES) {
-        const drop = outQueue.length - TARGET_QUEUE_FRAMES;
-        outQueue.splice(0, drop);
-        droppedFrames += drop;
-        console.warn(`${tag} [queue] shed ${drop} stale frames (q=${outQueue.length})`);
-      }
+      shedStaleQueue();
     }
     startPacer();
   }
