@@ -260,11 +260,12 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         }
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
-        // Anti-alias LPF first (kills the lispy/hissy "trail" after speech),
-        // then linear resample.
-        const f = lowpassPCM16(pcm24, lpfState);
-        lpfState = f.state;
-        const r = resamplePCM16(f.out, 24000, 16000, downState);
+        // NOTE: 7 kHz anti-alias LPF disabled — it was killing 5–7 kHz
+        // consonant energy on the AI voice and making everything sound
+        // muddy. Aliasing from raw decimation is preferable to that loss
+        // on speech. Keep `lowpassPCM16` defined above so we can flip it
+        // back on with one line if needed.
+        const r = resamplePCM16(pcm24, 24000, 16000, downState);
         downState = r.state;
         const pcm16 = r.out;
         if (pcm16.length === 0) break;
