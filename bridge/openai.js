@@ -262,7 +262,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
     // Greet the caller immediately
     sendSafe({
       type: "response.create",
-      response: { modalities: ["audio", "text"], instructions: "Greet the caller warmly: 'Hi, you've reached Sweet Spot — what can I get for you today?'" },
+      response: { modalities: ["audio", "text"], instructions: "Greet the caller warmly with EXACTLY this line, nothing more: 'Hi, you've reached Sweet Spot — all prices are based on the regular size unless you ask for a small or large. What can I get for you today?'" },
     });
   });
 
