@@ -412,10 +412,6 @@ async function main() {
     throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set");
   }
 
-  console.log(
-    `[bridge] build=${BRIDGE_BUILD_ID} queue target=${TARGET_QUEUE_FRAMES} hard=${HARD_QUEUE_FRAMES} burst=${MAX_BURST_PER_TICK}`
-  );
-
   const ari = await ariClient.connect(ARI_URL, ARI_USER, ARI_PASS);
   ari.on("StasisStart", (event, channel) => {
     if (channel.dialplan?.app_data?.includes("externalMedia")) return;
