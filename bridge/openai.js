@@ -252,19 +252,13 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
     switch (msg.type) {
       case "response.audio.delta": {
         let pcm24 = Buffer.from(msg.delta, "base64");
-        if (skipRemaining > 0) {
-          const drop = Math.min(skipRemaining, pcm24.length);
-          pcm24 = pcm24.slice(drop);
-          skipRemaining -= drop;
-          if (pcm24.length === 0) break;
-        }
         // OpenAI emits PCM16 LE @ 24 kHz. Asterisk on this VPS has no
         // slin24 translation paths, so resample down to 16 kHz (slin16).
-        // NOTE: 7 kHz anti-alias LPF disabled — it was killing 5–7 kHz
-        // consonant energy on the AI voice and making everything sound
-        // muddy. Aliasing from raw decimation is preferable to that loss
-        // on speech. Keep `lowpassPCM16` defined above so we can flip it
-        // back on with one line if needed.
+        // NOTE: this matches the known-good original (May 15) path —
+        // raw linear resample with stateful continuity, NO LPF, NO leading
+        // skip, NO per-response state reset. Each of those added a
+        // mid-stream discontinuity that showed up as an audible artefact
+        // riding over the voice.
         const r = resamplePCM16(pcm24, 24000, 16000, downState);
         downState = r.state;
         const pcm16 = r.out;
@@ -291,11 +285,10 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
       }
       case "response.created": {
         activeResponseId = msg.response?.id || null;
-        // New response starting — arm the leading-glitch skip and reset
-        // resampler state so we don't interpolate into stale samples.
-        skipRemaining = SKIP_BYTES_PER_RESPONSE;
-        downState = null;
-        lpfState = null;
+        // Intentionally do NOT reset downState/lpfState here. Resetting
+        // mid-call restarts the resampler with phase=0 and prev=first
+        // sample, which produces a small click at the start of each AI
+        // turn — that was the artefact riding over the audio.
         break;
       }
       case "response.done":
