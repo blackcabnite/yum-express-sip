@@ -72,13 +72,13 @@ const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = USE_SLIN16 ? 320 : 160;
 // Outbound on-wire frame size depends on codec.
 const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
-// Queue policy: keep latency bounded. If OpenAI gets ahead of realtime,
-// drop OLD audio rather than letting latency grow forever. For voice agents
-// conversational responsiveness > phoneme completeness.
-const TARGET_QUEUE_FRAMES  = 25;      // 500ms @ 20ms/frame
-const HARD_QUEUE_FRAMES    = 75;      // 1.5s absolute max
-const MAX_BURST_PER_TICK   = 2;       // 2 @ 5ms tick = 400pps theoretical catch-up
-const BRIDGE_BUILD_ID      = "queue-shed-target25-hard75-2026-05-18";
+// Keep latency bounded.
+// If OpenAI gets ahead of realtime, discard OLD audio.
+const TARGET_QUEUE_FRAMES = 25;   // 500ms
+const HARD_QUEUE_FRAMES   = 75;   // 1.5s absolute max
+
+// Max packets emitted per pacer tick.
+const MAX_BURST_PER_TICK = 2;
 
 const RTP_PORT_BASE        = 14000;
 const RTP_PORT_TOP         = 14200;
@@ -224,14 +224,6 @@ async function handleCall(ari, channel) {
   let partialOutbound = Buffer.alloc(0);  // leftover slin16 bytes (< 640)
   let lastAudioActivityAt = Date.now();
 
-  function shedStaleQueue() {
-    if (outQueue.length <= HARD_QUEUE_FRAMES) return;
-    const drop = outQueue.length - TARGET_QUEUE_FRAMES;
-    outQueue.splice(0, drop);
-    droppedFrames += drop;
-    console.warn(`${tag} [queue] shed ${drop} stale frames q=${outQueue.length}`);
-  }
-
   function enqueueOutbound(pcm16Slin16k) {
     lastAudioActivityAt = Date.now();
     // Carry partial-frame bytes across chunks (OpenAI deltas aren't 20ms-aligned).
@@ -257,7 +249,20 @@ async function handleCall(ari, channel) {
         }
       }
       outQueue.push(outFrame);
-      shedStaleQueue();
+
+      // If model audio gets too far ahead of realtime,
+      // discard oldest queued audio to preserve responsiveness.
+      if (outQueue.length > HARD_QUEUE_FRAMES) {
+        const drop = outQueue.length - TARGET_QUEUE_FRAMES;
+
+        outQueue.splice(0, drop);
+
+        droppedFrames += drop;
+
+        console.warn(
+          `${tag} [queue] shed ${drop} stale frames q=${outQueue.length}`
+        );
+      }
     }
     startPacer();
   }
