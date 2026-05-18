@@ -72,12 +72,14 @@ const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = USE_SLIN16 ? 320 : 160;
 // Outbound on-wire frame size depends on codec.
 const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
+// Queue policy:
 // Keep latency bounded.
 // If OpenAI gets ahead of realtime, discard OLD audio.
 const TARGET_QUEUE_FRAMES = 25;   // 500ms
 const HARD_QUEUE_FRAMES   = 75;   // 1.5s absolute max
 
-// Max packets emitted per pacer tick.
+// Small controlled catch-up.
+// 2 packets per 5ms tick = gentle drain without jitter explosions.
 const MAX_BURST_PER_TICK = 2;
 
 const RTP_PORT_BASE        = 14000;
@@ -250,7 +252,7 @@ async function handleCall(ari, channel) {
       }
       outQueue.push(outFrame);
 
-      // If model audio gets too far ahead of realtime,
+      // If AI audio gets too far ahead of realtime,
       // discard oldest queued audio to preserve responsiveness.
       if (outQueue.length > HARD_QUEUE_FRAMES) {
         const drop = outQueue.length - TARGET_QUEUE_FRAMES;
