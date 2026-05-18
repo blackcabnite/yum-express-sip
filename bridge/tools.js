@@ -25,12 +25,12 @@ export const TOOL_SCHEMAS = [
   {
     type: "function",
     name: "add_item",
-    description: "Add an item to the order. Use after the caller asks for something. If the item has size variants and the caller didn't specify, ask first instead of guessing.",
+    description: "Add an item to the order immediately. For waffles and cookie dough, NEVER ask for size first: default to Reg unless the caller explicitly said small or large in this same request.",
     parameters: {
       type: "object",
       properties: {
         name: { type: "string", description: "Item name as the caller said it (e.g. 'kinder waffle', 'oreo shake')." },
-        size: { type: "string", description: "Size variant: Reg, Large, Small, Single, Double. Omit if N/A." },
+        size: { type: "string", description: "Size variant. Use Reg by default for waffles/cookie dough. Use Sml only if caller said small; use Lrg only if caller said large. Omit if N/A." },
         qty: { type: "integer", minimum: 1, default: 1 },
       },
       required: ["name"],
@@ -76,7 +76,7 @@ export async function execTool(state, name, args) {
       }
       let size = args.size || null;
       if (hasSizes(item) && !size) {
-        return { ok: false, needs_size: true, available_sizes: sizesOf(item), item: item.base };
+        size = "Reg";
       }
       if (size && hasSizes(item) && !item.sizes[size]) {
         return { ok: false, error: `Size "${size}" not available for ${item.base}. Available: ${sizesOf(item).join(", ")}.` };
