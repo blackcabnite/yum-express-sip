@@ -72,7 +72,13 @@ const FRAME_BYTES_G722     = 160;     // 64kbps × 20ms / 8
 const TS_INC_PER_FRAME     = USE_SLIN16 ? 320 : 160;
 // Outbound on-wire frame size depends on codec.
 const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
-const MAX_QUEUE_FRAMES     = 3000;    // 60s cap; long AI replies must buffer fully without dropping frames
+// Conversational latency caps. AI can emit speech faster than realtime; if we
+// faithfully buffer it all, the caller hears stale audio and interruptions
+// stop working. Once the queue exceeds HARD_QUEUE_FRAMES (~1s), shed back to
+// TARGET_QUEUE_FRAMES (~500ms) so playback stays fresh.
+const TARGET_QUEUE_FRAMES  = 25;      // 500ms @ 20ms/frame
+const HARD_QUEUE_FRAMES    = 50;      // 1s   @ 20ms/frame
+const MAX_QUEUE_FRAMES     = 3000;    // absolute safety cap (60s)
 const MAX_BURST_PER_TICK   = 1;       // NEVER catch up faster than real time; prevents speed-up/tripping
 
 const RTP_PORT_BASE        = 14000;
@@ -243,11 +249,16 @@ async function handleCall(ari, channel) {
           continue;
         }
       }
-      if (outQueue.length >= MAX_QUEUE_FRAMES) {
-        outQueue.shift();
-        droppedFrames++;
-      }
       outQueue.push(outFrame);
+      // Shed stale frames once we're more than ~1s ahead of realtime. Keeping
+      // only the freshest ~500ms makes barge-in responsive and prevents the
+      // bridge from talking over itself after an OpenAI burst.
+      if (outQueue.length > HARD_QUEUE_FRAMES) {
+        const drop = outQueue.length - TARGET_QUEUE_FRAMES;
+        outQueue.splice(0, drop);
+        droppedFrames += drop;
+        console.warn(`${tag} [queue] shed ${drop} stale frames (q=${outQueue.length})`);
+      }
     }
     startPacer();
   }
