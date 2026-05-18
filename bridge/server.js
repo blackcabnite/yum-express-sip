@@ -75,8 +75,8 @@ const FRAME_BYTES_OUT      = USE_SLIN16 ? FRAME_BYTES_SLIN16 : FRAME_BYTES_G722;
 // Queue policy:
 // Keep latency bounded.
 // If OpenAI gets ahead of realtime, discard OLD audio.
-const TARGET_QUEUE_FRAMES = 25;   // 500ms
-const HARD_QUEUE_FRAMES   = 75;   // 1.5s absolute max
+const TARGET_QUEUE_FRAMES = 150;  // 3s
+const HARD_QUEUE_FRAMES   = 300;  // 6s absolute max
 
 // Small controlled catch-up.
 // 2 packets per 5ms tick = gentle drain without jitter explosions.
