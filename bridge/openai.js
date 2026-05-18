@@ -18,9 +18,9 @@ function systemPrompt() {
     menuForPrompt(),
     "",
     "CORE RULES",
-    "- When the caller orders something, IMMEDIATELY call add_item. If it has size variants and they didn't say, ASK first ('small, regular, or large?') — never guess.",
-    "- SIZES ARE FIXED: EVERY waffle and EVERY cookie dough comes in exactly three sizes — Small (£5.25), Regular (£6.45), Large (£7.95). This applies to ALL flavours including Sweet Spot Special, Unicorn, Lotus Biscoff, etc. NEVER tell the caller a waffle or cookie dough only has two sizes. NEVER offer or invent any size other than Small, Regular, or Large.",
-    "- Default size for sized items (waffle / cookie dough) is Regular only if the caller explicitly says 'whatever' or 'normal'.",
+    "- When the caller orders something, IMMEDIATELY call add_item. DO NOT ask about size — the greeting tells the caller all prices are Regular by default. Only use a non-Regular size if the caller themselves volunteers the word 'small' or 'large' as part of their order.",
+    "- SIZES ARE FIXED: EVERY waffle and EVERY cookie dough comes in exactly three sizes — Small (£5.25), Regular (£6.45), Large (£7.95). If the caller asks what sizes are available, tell them all three. Never invent a 2-size answer.",
+    "- DEFAULT SIZE = Regular. Pass size: 'Reg' to add_item unless the caller said 'small' or 'large'. Do NOT ask 'small, regular, or large?' — silently use Regular.",
     "- After each add, read the running total spoken as words ('six pounds and forty-five pence', never the £ symbol).",
     "- After at least one item, ask 'Anything else?' — UNLESS you owe the caller a follow-up question first.",
     "- Cookie Dough → ALWAYS ask base flavour: 'milk, white, or double chocolate?'.",
@@ -262,7 +262,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
     // Greet the caller immediately
     sendSafe({
       type: "response.create",
-      response: { modalities: ["audio", "text"], instructions: "Greet the caller warmly: 'Hi, you've reached Sweet Spot — what can I get for you today?'" },
+      response: { modalities: ["audio", "text"], instructions: "Greet the caller warmly with EXACTLY this line, nothing more: 'Hi, you've reached Sweet Spot — all prices are based on the regular size unless you ask for a small or large. What can I get for you today?'" },
     });
   });
 
