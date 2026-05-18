@@ -280,7 +280,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
         instructions: systemPrompt(),
-        turn_detection: { type: "server_vad", threshold: 0.3, prefix_padding_ms: 300, silence_duration_ms: 700 },
+        turn_detection: { type: "server_vad", threshold: 0.6, prefix_padding_ms: 400, silence_duration_ms: 800 },
         input_audio_transcription: { model: "whisper-1" },
         tools: TOOL_SCHEMAS,
         tool_choice: "auto",
@@ -393,9 +393,13 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
       case "response.function_call_arguments.done": {
         const { name, call_id, arguments: argStr } = msg;
         let args = {}; try { args = JSON.parse(argStr || "{}"); } catch {}
+        console.log("[tool_call]", name, JSON.stringify(args));
+        await logEvent(state.sessionId, "tool_call", name, { args });
         let result;
         try { result = await execTool(state, name, args); }
         catch (e) { result = { ok: false, error: String(e) }; }
+        console.log("[tool_result]", name, JSON.stringify(result));
+        await logEvent(state.sessionId, "tool_result", name, result);
         sendSafe({
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id, output: JSON.stringify(result) },
