@@ -8,6 +8,8 @@ import { logEvent, updateSession } from "./supabase.js";
 const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17"}`;
 const VOICE = process.env.VOICE || "coral";
 
+const FORBIDDEN_SIZE_ASK_RE = /\b(small,?\s+regular,?\s+(?:or\s+)?large|small,?\s+regular|regular\s+or\s+large|would you like .*\b(?:small|regular|large)\b.*\b(?:small|regular|large)\b|in small|as small|what size|which size)\b/i;
+
 function systemPrompt() {
   return [
     "You are Ada, the Sweet Spot Cafe's phone-ordering assistant.",
@@ -18,9 +20,13 @@ function systemPrompt() {
     menuForPrompt(),
     "",
     "CORE RULES",
-    "- When the caller orders something, IMMEDIATELY call add_item. DO NOT ask about size — the greeting tells the caller all prices are Regular by default. Only use a non-Regular size if the caller themselves volunteers the word 'small' or 'large' as part of their order.",
+    "- When the caller orders something, IMMEDIATELY call add_item. DO NOT ask about size — the greeting tells the caller all prices are Regular by default. Only use a non-Regular size if the caller themselves volunteers the word 'small' or 'large' as part of that exact order.",
     "- SIZES ARE FIXED: EVERY waffle and EVERY cookie dough comes in exactly three sizes — Small (£5.25), Regular (£6.45), Large (£7.95). If the caller asks what sizes are available, tell them all three. Never invent a 2-size answer.",
-    "- DEFAULT SIZE = Regular. Pass size: 'Reg' to add_item unless the caller said 'small' or 'large'. Do NOT ask 'small, regular, or large?' — silently use Regular.",
+    "- DEFAULT SIZE = Regular. Pass size: 'Reg' to add_item unless the caller said 'small' or 'large'. Do NOT ask 'small, regular, or large?', 'what size?', or any size-selection question — silently use Regular.",
+    "- ABSOLUTE RULE: If caller says 'Sweet Spot Special', treat it as Sweet Spot Special Waffle, call add_item with size:'Reg', then continue. Never ask its size.",
+    "- WRONG: Caller: 'one Sweet Spot Special and one Karak Chai.' Assistant: 'Would you like the Sweet Spot Special Waffle in small, regular, or large?'",
+    "- RIGHT: Caller: 'one Sweet Spot Special and one Karak Chai.' Assistant calls add_item({name:'Sweet Spot Special Waffle', size:'Reg', qty:1}) and add_item({name:'Karak Chai', qty:1}).",
+    "- RIGHT: Caller: 'one small Sweet Spot Special.' Assistant calls add_item({name:'Sweet Spot Special Waffle', size:'Sml', qty:1}).",
     "- After each add, read the running total spoken as words ('six pounds and forty-five pence', never the £ symbol).",
     "- After at least one item, ask 'Anything else?' — UNLESS you owe the caller a follow-up question first.",
     "- Cookie Dough → ALWAYS ask base flavour: 'milk, white, or double chocolate?'.",
@@ -273,7 +279,7 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
         input_audio_transcription: { model: "whisper-1" },
         tools: TOOL_SCHEMAS,
         tool_choice: "auto",
-        temperature: 0.7,
+        temperature: 0.6,
       },
     });
     // Greet the caller immediately
@@ -348,6 +354,10 @@ export function openOpenAIRealtime({ state, onAudioToCaller, onCallerSpeechStart
       }
       case "response.audio_transcript.done": {
         if (msg.transcript) {
+          if (FORBIDDEN_SIZE_ASK_RE.test(msg.transcript)) {
+            await logEvent(state.sessionId, "blocked_size_question", msg.transcript);
+            break;
+          }
           await updateSession(state.sessionId, { last_ai_line: msg.transcript });
           await logEvent(state.sessionId, "ai_speech", msg.transcript);
         }
