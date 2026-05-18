@@ -1,0 +1,20 @@
+[Unit]
+Description=Sweet Spot Opus SIP gateway (Asterisk <-> OpenAI Realtime, end-to-end Opus)
+After=network-online.target asterisk.service sweetspot-bridge.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sweetspot/.env
+Environment=SIP_PORT=5070
+Environment=RTP_PORT=40000
+WorkingDirectory=/opt/sweetspot-bridge
+ExecStart=/usr/bin/node /opt/sweetspot-bridge/opus-gateway.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+User=root
+
+[Install]
+WantedBy=multi-user.target
