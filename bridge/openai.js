@@ -5,7 +5,7 @@ import { TOOL_SCHEMAS, execTool } from "./tools.js";
 import { menuForPrompt } from "./menu.js";
 import { logEvent, updateSession } from "./supabase.js";
 
-const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17"}`;
+const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-mini"}`;
 const VOICE = process.env.VOICE || "coral";
 
 const FORBIDDEN_SIZE_ASK_RE = /\b(small,?\s+regular,?\s+(?:or\s+)?large|small,?\s+regular|regular\s+or\s+large|would you like (?:the )?sweet spot special|waffles?\s+or\s+cookie dough|would you like .*\b(?:regular size|small|regular|large)\b|do you want .*\b(?:regular size|small|regular|large)\b|in small|as small|what size|which size)\b/i;
