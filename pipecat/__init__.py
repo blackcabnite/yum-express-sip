@@ -1,0 +1,1 @@
+"""Sweet Spot Pipecat bot package."""
